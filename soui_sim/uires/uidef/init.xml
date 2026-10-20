@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UIDEF>
+  <!-- The simulator framebuffer is 320x240 *physical* pixels.  "px" keeps the
+       layout 1:1 with it; "dp" would scale by dpi/160 (= 0.6 on a 96dpi host)
+       and shrink everything. -->
+  <unit defUnit="px"/>
+  <deffont value="size:14"/>
+
+  <string src="values:string"/>
+  <skin src="values:skin"/>
+  <color src="values:color"/>
+
+  <style>
+    <!-- Same global styles as wizard/CmakeApp/uires/uidef/init.xml.  A style
+         class is applied with class="name" on any control. -->
+    <class name="normalbtn" font="" colorText="@color/thm_txt_normal" textMode="0x25" cursor="hand" margin-x="0"/>
+    <class name="cls_txt_title" font="size:15,bold:1" colorText="@color/thm_txt_normal"/>
+    <class name="cls_txt_sub" font="size:12" colorText="@color/thm_txt_hover" multilines="1"/>
+  </style>
+</UIDEF>

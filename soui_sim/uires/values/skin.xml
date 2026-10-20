@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<skin>
+  <!-- Application skin objects.  A skin declared here can be used by name from
+       any layout (skin="app_logo") or from code via GETSKIN(L"app_logo", 100). -->
+  <imglist name="app_logo" src="PNG:LOGO_PNG"/>
+</skin>

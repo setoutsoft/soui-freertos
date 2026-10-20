@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Main window layout.
+
+  Written the way wizard/CmakeApp writes its layouts:
+    * a <caption> with the app icon, the title from @string and the SOUI system
+      caption buttons (_skin.sys.btn.minimize / _skin.sys.btn.close),
+    * the window background is the system nine-patch _skin.sys.wnd.bkgnd,
+    * colours / strings come from uires/values, never from literals,
+    * text styles (cls_txt_title / cls_txt_sub) come from uidef/init.xml.
+-->
+<SOUI name="mainWindow" title="@string/title" wndType="appMain" appWnd="1" margin="0" resizable="0" translucent="0">
+  <root skin="_skin.sys.wnd.bkgnd" cache="1" width="320" height="240">
+    <!-- simulated title bar -->
+    <caption pos="0,0,-0,28" font="adding:2" layout="hbox" gravity="center" padding_left="10">
+      <img skin="app_logo" size="16,16"/>
+      <text name="txt_title" text="@string/title" extend_left="6" colorText="@color/thm_txt_normal"/>
+      <window size="0,0" weight="1" visible="0"/>
+      <imgbtn name="btn_min" skin="_skin.sys.btn.minimize" animate="1"/>
+      <imgbtn name="btn_close" skin="_skin.sys.btn.close" tip="close" animate="1"/>
+    </caption>
+
+    <!-- content: bitmap on the left, description on the right -->
+    <img name="img_view" pos="14,42,78,106"/>
+    <text class="cls_txt_title" text="@string/hello" pos="88,44,-14,66"/>
+    <text class="cls_txt_sub" text="@string/sub" pos="88,68,-14,106"/>
+
+    <!-- commands handled by CMainDlg via EVENT_ID_COMMAND(R.id.xxx) -->
+    <button name="btn_test" class="normalbtn" pos="14,118,110,144" text="@string/btn_switch" animate="1" tip="PNG / SVG"/>
+    <button name="btn_anim" class="normalbtn" pos="118,118,214,144" text="@string/btn_anim" animate="1" tip="freeze / resume"/>
+
+    <text class="cls_txt_sub" text="@string/anim_label" pos="14,152,-14,172"/>
+
+    <!-- animation targets, driven by CMainDlg::onAnimationUpdate() -->
+    <window name="anim_box" pos="14,178,54,204" colorBkgnd="@color/orange"/>
+    <window name="fade_box" pos="14,208,54,234" colorBkgnd="@color/blue"/>
+  </root>
+</SOUI>

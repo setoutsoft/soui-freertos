@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resource>
+	<UIDEF>
+		<file name="xml_init" path="uidef\init.xml" />
+	</UIDEF>
+	<LAYOUT>
+		<file name="MAIN" path="xml\main.xml" />
+	</LAYOUT>
+</resource>

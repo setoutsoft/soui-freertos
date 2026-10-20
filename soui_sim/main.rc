@@ -1,0 +1,13 @@
+// main.rc -- application resource script.
+//
+// Mirrors wizard/CmakeApp/main.rc and demos/demo/demo.rc: windres compiles this
+// into ONE PE-COFF object carrying both resource sets
+//
+//   soui_res.rc2       application resources, generated from uires/uires.idx
+//   theme_sys_res.rc2  SOUI system resources (skins / msgbox / editmenu / theme)
+//
+// That object is embedded into the image as a data blob (cmake/soui.cmake) and
+// served at runtime by swinx's WindResResourceParser, so the app takes the
+// standard SResProviderPE path -- nothing is loaded from disk.
+#include "soui_res.rc2"       // app resources     (--include-dir <build>/soui_sim_res)
+#include "theme_sys_res.rc2"  // system resources  (--include-dir soui-sys-resource)

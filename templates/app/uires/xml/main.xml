@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Addressed as "LAYOUT:MAIN" (see uires/uires.idx + main.cpp). -->
+<SOUI name="mainWindow" title="SOUI5 on FreeRTOS" wndType="appWnd" appWnd="0">
+  <root width="320" height="240" colorBkgnd="#1E1E1EFF" layout="vbox" padding="16,16,16,16">
+    <text name="title" size="-2,28" text="SOUI5 on FreeRTOS" colorText="#FFFFFFFF"/>
+    <text name="hint" size="-2,22" text="hover / press the button" colorText="#909090FF"/>
+    <!-- animate="1": hover and push states are cross-faded by a value
+         animator on the SOUI timeline (no code needed). -->
+    <button name="btn" size="140,36" text="click me" animate="1"/>
+  </root>
+</SOUI>

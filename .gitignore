@@ -1,0 +1,21 @@
+# ---- build trees (all projects) ----
+build/
+build*/
+
+# ---- logs ----
+*.log
+
+# ---- debug / intermediate artifacts ----
+*.ppm
+*.bin
+*.o
+*.obj
+curstack.bin
+undefs.txt
+demo/qemu_out.txt
+demo/qemu_err.txt
+swinx_test/mon.txt
+
+# ---- editor / OS ----
+.vscode/
+Thumbs.db

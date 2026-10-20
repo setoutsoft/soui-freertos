@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<string>
+  <title value="SOUI5 on FreeRTOS"/>
+  <hello value="SOUI5 running on FreeRTOS"/>
+  <sub value="swinx platform layer + render-gdi (cairo) + imgdecoder-stb, presented through an SDL2 framebuffer."/>
+  <btn_switch value="Switch image"/>
+  <btn_anim value="Freeze anim"/>
+  <anim_label value="ValueAnimator on the SOUI timeline: sweep (SIntAnimator) + alpha (SByteAnimator)"/>
+</string>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Global UI definition, addressed as "uidef:xml_init" by main.cpp.
+     No skin/string indirection: layouts use literal colors so the app needs
+     nothing but this file to start. -->
+<UIDEF>
+  <unit defUnit="px"/>
+</UIDEF>
