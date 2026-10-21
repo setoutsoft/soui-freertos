@@ -1,7 +1,7 @@
 # =============================================================================
 # templates/app -- copy this directory to start a new "SOUI on FreeRTOS" app.
 #
-#   cp -r freertos_env/templates/app  my_app
+#   cp -r soui-freertos/templates/app  my_app
 #   cmake -S my_app -B my_app/build -G Ninja
 #   ninja -C my_app/build && ./my_app/build/hello_freertos.exe
 #
@@ -26,10 +26,10 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Locate freertos_env.  Walking up from this file finds it for any project that
-# lives inside the workspace (templates/app -> freertos_env, or a sibling copy
-# under freertos_env/).  A project created OUTSIDE the workspace passes
-#   -DSOUI_FR_ENV_DIR=D:/work/soui4/freertos_env
+# Locate soui-freertos.  Walking up from this file finds it for any project that
+# lives inside the workspace (templates/app -> soui-freertos, or a sibling copy
+# under soui-freertos/).  A project created OUTSIDE the workspace passes
+#   -DSOUI_FR_ENV_DIR=D:/work/soui4/soui-freertos
 if(NOT SOUI_FR_ENV_DIR)
     set(_probe "${CMAKE_CURRENT_LIST_DIR}")
     foreach(_i RANGE 6)
@@ -43,8 +43,8 @@ if(NOT SOUI_FR_ENV_DIR)
 endif()
 if(NOT SOUI_FR_ENV_DIR)
     message(FATAL_ERROR
-        "freertos_env not found above ${CMAKE_CURRENT_LIST_DIR}. "
-        "Configure with -DSOUI_FR_ENV_DIR=<path to freertos_env>.")
+        "soui-freertos not found above ${CMAKE_CURRENT_LIST_DIR}. "
+        "Configure with -DSOUI_FR_ENV_DIR=<path to soui-freertos>.")
 endif()
 
 include(${SOUI_FR_ENV_DIR}/cmake/soui.cmake)

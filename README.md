@@ -1,15 +1,15 @@
-# freertos_env — SOUI FreeRTOS 工作区
+# soui-freertos — SOUI FreeRTOS 工作区
 
 SOUI4/SOUI5 移植 FreeRTOS 的全部实验工程。上游源码在 `D:/work/soui4`（SOUI core + swinx 平台层），本仓库只放各目标环境的工程胶水与测试程序。
 
-> 本仓库已作为 **soui4 的 git 子模块**（`soui4/freertos_env`）。子模块场景下各 CMakeLists 自动以 `../..` 定位 SOUI 源码；独立 checkout 时回退 `D:/work/soui4`。
+> 本仓库已作为 **soui4 的 git 子模块**（`soui4/soui-freertos`）。子模块场景下各 CMakeLists 自动以 `../..` 定位 SOUI 源码；独立 checkout 时回退 `D:/work/soui4`。
 
 ## 工程一览
 
 | 目录 | 目标 | 说明 |
 |------|------|------|
 | `cmake/soui.cmake` | — | **唯一构建入口**：`include` + `soui_fr_project()` 即完成整环境搭建 |
-| `sim/` | Windows 宿主 | SDL2 宿主运行时（出图/注入/脚本/截图），被 `SIM_HOST` 工程复用 |
+| `sim/` | Windows 宿主 | SDL2 宿主运行时（窗口/出图/鼠标键盘注入），被 `SIM_HOST` 工程复用 |
 | `templates/app/` | Windows 宿主 | 新建工程模板：复制即用，构建脚本 2 行 |
 | `demo/` | QEMU mps2-an385 (Cortex-M3) | 裸机 FreeRTOS 冒烟：UART 输出 + 调度器跑通，移植 earliest 基线 |
 | `swinx_test/` | QEMU mps2-an385 | swinx freertos 平台层单测（fb/input/syncobj/render 等 main_*.cpp 变体） |
@@ -29,7 +29,7 @@ FreeRTOS 内核默认用本仓库 vendored 的 `FreeRTOS-Kernel/`（含 `portabl
 ## 新建项目：一个 include + 一个函数
 
 ```bash
-cp -r freertos_env/templates/app  my_app
+cp -r soui-freertos/templates/app  my_app
 cmake -S my_app -B my_app/build -G Ninja
 ninja -C my_app/build && ./my_app/build/hello_freertos.exe
 ```
@@ -37,7 +37,7 @@ ninja -C my_app/build && ./my_app/build/hello_freertos.exe
 `my_app/CMakeLists.txt` 全文（除 `project()`/编译标准外）就这两行：
 
 ```cmake
-include(<freertos_env>/cmake/soui.cmake)
+include(<soui-freertos>/cmake/soui.cmake)
 soui_fr_project(hello_freertos SOURCES main.cpp SIM_HOST)
 ```
 
@@ -59,7 +59,7 @@ soui_fr_project(hello_freertos SOURCES main.cpp SIM_HOST)
 需要更细的控制时，底层 API 仍然可用：
 
 ```cmake
-include(<freertos_env>/cmake/soui.cmake)
+include(<soui-freertos>/cmake/soui.cmake)
 soui_fr_add_all()
 add_executable(app main.cpp)
 soui_fr_link_app(app)                 # 等价于 target_link_libraries(app PRIVATE soui_fr::app)

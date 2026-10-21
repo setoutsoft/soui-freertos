@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-cd /d/work/freertos_env/demo
+cd /d/work/soui4/soui-freertos/demo
 echo "MSYSTEM=$MSYSTEM"
 which arm-none-eabi-gcc cmake ninja
 rm -rf build

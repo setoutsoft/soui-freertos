@@ -3,7 +3,7 @@
 #
 #   cmake_minimum_required(VERSION 3.20)
 #   project(my_app C CXX)
-#   include(<freertos_env>/cmake/soui.cmake)
+#   include(<soui-freertos>/cmake/soui.cmake)
 #   soui_fr_project(my_app SOURCES main.cpp SIM_HOST)
 #
 # That is the whole build system of a new project.  Everything else -- the
@@ -59,7 +59,7 @@ get_filename_component(SOUI_FR_ENV_DIR "${SOUI_FR_CMAKE_DIR}" DIRECTORY)
 #
 # These two directories have to be known *before* SouiFreeRTOS.cmake runs,
 # because it bakes them into the INTERFACE targets.  Both follow the layout a
-# new project gets by copying freertos_env/templates/app, but stay overridable
+# new project gets by copying soui-freertos/templates/app, but stay overridable
 # by -D or by setting the variable before this include.
 # -----------------------------------------------------------------------------
 if(NOT SOUI_FR_CONFIG_DIR AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/config/FreeRTOSConfig.h")

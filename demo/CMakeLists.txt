@@ -7,7 +7,7 @@ set( CMAKE_CXX_STANDARD 11 )
 
 # ---- external sources -----------------------------------------------------
 set( FREERTOS_KERNEL ${CMAKE_CURRENT_SOURCE_DIR}/../FreeRTOS-Kernel )
-# swinx source: submodule layout (soui4/freertos_env/demo) resolves ../..;
+# swinx source: submodule layout (soui4/soui-freertos/demo) resolves ../..;
 # standalone D:/work layout is the fallback.
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../../swinx)
     set( SWINX_DIR   ${CMAKE_CURRENT_SOURCE_DIR}/../../swinx )

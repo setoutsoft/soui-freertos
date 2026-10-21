@@ -3,7 +3,7 @@
 复制整个目录即可开工：
 
 ```bash
-cp -r freertos_env/templates/app  my_app
+cp -r soui-freertos/templates/app  my_app
 cmake -S my_app -B my_app/build -G Ninja
 ninja -C my_app/build && ./my_app/build/hello_freertos.exe   # 关窗口退出
 ```

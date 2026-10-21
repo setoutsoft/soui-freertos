@@ -1,6 +1,6 @@
 # SOUI 核心 FreeRTOS 链接尝试 — 评估报告
 
-日期：2026-10-04 ｜ 工程：`/d/work/freertos_env/soui_fr/` ｜ 工具链：arm-none-eabi-gcc 13.3 (cortex-m3, -Os, -fno-rtti, -fexceptions)
+日期：2026-10-04 ｜ 工程：`/d/work/soui4/soui-freertos/soui_fr/` ｜ 工具链：arm-none-eabi-gcc 13.3 (cortex-m3, -Os, -fno-rtti, -fexceptions)
 
 ## 结论
 
@@ -50,7 +50,7 @@
 ## 复现
 
 ```bash
-cd /d/work/freertos_env/soui_fr/build
+cd /d/work/soui4/soui-freertos/soui_fr/build
 cmake -G Ninja -DCMAKE_TOOLCHAIN_FILE=../demo/cmake/toolchain-arm-freertos.cmake -DBOARD=mps2 -DSOUI_FR_CENSUS=ON ..   # census
 cmake --build .
 # runnable: -DSOUI_FR_CENSUS=OFF，qemu-system-arm -M mps2-an385 -nographic -kernel soui_fr.elf

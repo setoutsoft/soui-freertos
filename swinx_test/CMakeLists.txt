@@ -20,7 +20,7 @@ add_compile_definitions(WCHAR_SIZE=__SIZEOF_WCHAR_T__)
 
 set(FREERTOS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../FreeRTOS-Kernel)
 set(DEMO_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/../demo)
-# swinx source: submodule layout (soui4/freertos_env/swinx_test) resolves
+# swinx source: submodule layout (soui4/soui-freertos/swinx_test) resolves
 # ../..; standalone D:/work layout is the fallback.
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../../swinx)
     set(SWINX_DIR   ${CMAKE_CURRENT_SOURCE_DIR}/../../swinx)

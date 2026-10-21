@@ -19,7 +19,7 @@ set(CMAKE_CXX_STANDARD 11)
 # for uniformity with soui_sim's MinGW host build where the builtin is 2).
 add_compile_definitions(WCHAR_SIZE=__SIZEOF_WCHAR_T__)
 
-# SOUI source tree: submodule layout (soui4/freertos_env/soui_fr) resolves
+# SOUI source tree: submodule layout (soui4/soui-freertos/soui_fr) resolves
 # ../..; standalone D:/work layout is the fallback.
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../../SOUI)
     set(SOUI_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
