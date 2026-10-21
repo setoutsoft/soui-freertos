@@ -17,7 +17,7 @@
 #     SouiFreeRTOS.cmake    dependency description (INTERFACE targets)
 #     CopyRuntimeDlls.cmake POST_BUILD helper for the system-deps build
 #     soui_fr_compat.h      force-included compat header
-#   ../sim/                 optional SDL2 host runtime (window/input/script)
+#   ../sim/                 optional SDL2 host runtime (window + input)
 #
 # Public API (all optional except the first):
 #

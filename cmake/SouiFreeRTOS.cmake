@@ -248,7 +248,7 @@ function(soui_fr_create_platform_target)
         # symbols (_wtof, wcscpy_s, _open_osfhandle, __int64, bsearch...) and
         # must not decorate its implementations with DECLSPEC_IMPORT.
         target_compile_definitions(soui_fr_platform INTERFACE
-            SOUI_PLATFORM_FREERTOS_HOST)
+            FREERTOS_HOST)
     endif()
 
     if(SOUI_FR_WARN_FLAGS)

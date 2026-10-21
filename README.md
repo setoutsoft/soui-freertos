@@ -51,7 +51,7 @@ soui_fr_project(hello_freertos SOURCES main.cpp SIM_HOST)
 | SOUI | utilities + core + render-gdi + imgdecoder-stb（whole-archive 保留 COM 注册对象） |
 | 资源 | `uires/uires.idx` → uiresbuilder → windres COFF → `.incbin` 数据段（`.balign 4`，Cortex-M 非对齐会 fault） |
 | 启动 | 和 wizard 工程一样自己写：`SApplication` + `SAppCfg`（`SetRender(Render_Gdi)` / `SetImgDecoder(ImgDecoder_Stb)` / `SetSysResPeHandle` / `SetAppResPeHandle`）→ `cfg.DoConfig(&app)`；`SAppCfg` 内部把 render-gdi 工厂与 imgdecoder-stb 一起注册好（缺后者会在 `LoadSystemNamedResource` 里解码系统皮肤时静默段错误），不再是框架提供的"启动胶水" |
-| 宿主出图 | `SIM_HOST` 时链 `sim/soui_sim_hal.cpp`（SDL2 窗口/ARGB 纹理/事件注入/脚本/截图） |
+| 宿主出图 | `SIM_HOST` 时链 `sim/soui_sim_hal.cpp`（SDL2 窗口 / ARGB 纹理 / 鼠标键盘注入） |
 | Windows 运行 | system-deps 构建自动把 20 个运行时 DLL 收拢到 exe 同级 |
 
 参数（全部可选）：`SOURCES`（必填）、`RESOURCES`（默认 `./uires`）、`RESOURCE_SCRIPT`（默认自动生成）、`NO_RESOURCES`、`FREERTOS_CONFIG`（默认 `./config`）、`SIM_HOST`、`INCLUDES`、`LIBRARIES`、`OUTPUT_NAME`。裸机交叉编译只需换 toolchain file 并去掉 `SIM_HOST`。
@@ -82,7 +82,7 @@ soui_fr_link_app(app)                 # 等价于 target_link_libraries(app PRIV
 | `uires/xml/dlg_main.xml` | 同 wizard：`_skin.sys.wnd.bkgnd` 背景 + `<caption>` 标题栏（`_skin.sys.btn.minimize` / `.close`）+ `class="normalbtn"` 按钮 |
 | `uires/uidef/init.xml` | 同 wizard：`<unit>` / `<deffont>` / 样式类；文案与颜色走 `@string/*`、`@color/*` |
 | `config/FreeRTOSConfig.h` | FreeRTOS 专有（栈、heap_3、hook 开关） |
-| `sim/soui_sim_hal.*` | 模拟器专有的宿主壳：SDL2 窗口 / ARGB 纹理 / 鼠标键盘注入 / 脚本与截图 |
+| `sim/soui_sim_hal.*` | 模拟器专有的宿主壳：SDL2 窗口 / ARGB 纹理 / 鼠标键盘注入 |
 
 两处当前仍与 wizard 不同（受平台层能力限制）：
 
@@ -127,7 +127,7 @@ swinx 里判断"是不是 FreeRTOS 平台 / 有没有宿主 OS / 内核原语从
 | 构建参数 | 派生开关 |
 |---|---|
 | `SOUI_PLATFORM_FREERTOS` | `SFR_PLATFORM = 1` |
-| `SOUI_PLATFORM_FREERTOS_HOST` | `SFR_PLATFORM = 1`、`SFR_HOSTED = 1` |
+| `FREERTOS_HOST` | `SFR_PLATFORM = 1`、`SFR_HOSTED = 1`（宿主 OS + CRT 在下面） |
 | `SOUI_FREERTOS_REAL` | `SFR_KERNEL_REAL = 1`（真内核 API） |
 | `SOUI_FREERTOS_HOST_EMU` | `SFR_KERNEL_EMU = 1`（POSIX 模拟） |
 
