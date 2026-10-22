@@ -89,6 +89,16 @@ soui_fr_link_app(app)                 # 等价于 target_link_libraries(app PRIV
 - swinx freertos 的 `LoadImageW/A`、`CreateIconFromResource` 还是 NULL 桩，所以 `<icon src="ICON_LOGO">` / `bigIcon` 用不了 —— 标题栏 logo 改成 `<img skin="app_logo">`（PNG 皮肤）。
 - 该工具链不定义 `_UNICODE`（`TCHAR == char`），字符串字面量一律 `_T(...)`，`L"..."` 不能直接喂给 `LPCTSTR` 接口。
 
+## 工作原理（soui_sim）
+
+`soui_sim` 不是"又一个 SDL demo"，而是一份跑在**真实 FreeRTOS 任务**里的标准 SOUI 应用：
+
+- 入口在原生 `main()` 线程上 `xTaskCreate(app_task, …)` + `vTaskStartScheduler()`；`app_task` 里 `SApplication` + `SAppCfg::DoConfig()` 起 SOUI，然后在 FreeRTOS 任务里跑宿主消息泵——`SimHalPumpEvents()` 把 SDL 事件转成 swinx 输入、`SimHalRenderIfDirty()` 把 swinx 帧缓冲刷到 SDL 纹理，循环条件 `while(IsWindow(hWnd))`。
+- 出图与输入由 `sim/soui_sim_hal.cpp`（SDL2 窗口 / ARGB 纹理 / 鼠标键盘注入）承担，被 `SIM_HOST` 工程复用；与真实 FreeRTOS 目标唯一的差别只是"窗口系统后端"换成了 SDL。
+- **退出路径是确定性的**：窗口 `DestroyWindow` 后 `IsWindow` 落到 `WndMgr` 注册表（窗口已摘除即返回 FALSE），循环退出 → `app_task` 调 `vTaskEndScheduler()` 让内核辅助线程 inert，再以 `ExitThread(0)` 结束自身任务线程；`vTaskStartScheduler()` 返回原生 `main()` 线程，`main()` 正常 `return`。早期版本里 `SConnection::IsWindow` 恒真（循环永不退出）或 `vTaskEndScheduler` 后走 `vTaskDelete` 自删（触发 `port.c` 断言）都已修复。
+
+它与 QEMU 裸机目标**同源同代码**：swinx freertos 平台层、SOUI 应用、XML 布局完全一致，只是出图后端（SDL vs LCD 帧缓冲）和是否在真实内核上跑不同。
+
 ## 构建
 
 ```bash
@@ -118,7 +128,33 @@ cmake -S <proj> -B <proj>/build -G Ninja && ninja -C <proj>/build
 
 模拟器不再内置自动化测试：交互就是人点、眼睛看。要做回归时，验证点本身是"点一下，界面有没有对"；需要留证据就系统截图（Win+Shift+S）。
 
-`soui_sim/screenshots/` 存了三张定妆图：`00_idle.png`（PNG 态）、`02_pressed.png`（按钮按下）、`i1.png`（点击后切到 SVG）。
+`soui_sim/screenshots/` 存定妆图（如 `00_idle.png`）；需要更多证据用系统截图（Win+Shift+S）。
+
+## 调试与排障
+
+- **无窗口 / 秒退（`0xc0000139`，进不了 `main()`）**：PATH 里另一套 MinGW（PortableGit / Android platform-tools / xampp）的 `libwinpthread-1.dll` / `zlib1.dll` / `libiconv-2.dll` 影子掉了 exe 旁边的同名 DLL。`SOUI_FR_USE_SYSTEM_DEPS=ON` 构建会自动把运行时 DLL 收拢到 exe 同级（exe 目录优先级最高），或把冲突目录从 PATH 移除。
+- **内核断言不再自旋**：`fr_sim_assert`（FreeRTOS `configASSERT` 落点）已从 `for(;;)` 自旋改为 `RtlCaptureStackBackTrace` 打印原始返回地址后 `_exit(3)`。复现时抓到地址后用 `addr2line -e soui_sim.exe -f -C <addr>` 离线定位（构建链了 `--disable-dynamicbase`，地址可对照；该选项是生成文件，重生成即失）。
+- **无显示环境下触发关闭 / 退出**：设 `SOUI_SIM_AUTOEXIT=1`，消息泵迭代约 60 次后自动注入关闭按钮点击，可 headless 跑通"关闭 → 退出"整条路径（**不要**在泵里直接 `DestroyWindow`，无真实事件泵时会同步死锁）。
+- **gdb 注入鼠标事件**：`SwinxInjectMouse((unsigned long long)hwnd, msg, x, y, down)` 可向目标窗口投递 `WM_MOUSEMOVE`(0x0200) / `WM_LBUTTONDOWN`(0x0201) / `WM_LBUTTONUP`(0x0202)，用于在无头环境复现点击交互与 teardown。
+
+## 裸机目标与 QEMU 实跑
+
+`soui_fr` / `swinx_test` / `demo` 三个工程交叉编译到 **QEMU mps2-an385（Cortex-M3）**，共用 vendored 内核与 `demo/cmake/toolchain-arm-freertos.cmake`。典型流程：
+
+```bash
+cd soui-freertos/swinx_test
+cmake -S . -B build -G Ninja \
+    -DCMAKE_TOOLCHAIN_FILE=../demo/cmake/toolchain-arm-freertos.cmake
+cmake --build build
+qemu-system-arm -M mps2-an385 -nographic -kernel build/swinx_test.elf
+# 需要完整跑完读日志：
+qemu-system-arm -M mps2-an385 -kernel build/swinx_test.elf \
+    -serial file:C:/temp/qemu.log -display none
+```
+
+完整构建 / 运行 / 排障（含 `soui_fr` 的 `-semihosting` 出图、`demo` 的小板、串口 stdio 背压假 hang、`-serial file:` 必须写 Windows 绝对路径）见《SOUI5-FreeRTOS 开发指南》。
+
+> 🚨 **FLASH 4MB 物理上限**：mps2-an385 的 ZBT SSRAM1 只有 4MB，text 越过 `0x00400000` 即与 RAM 物理重叠，复位即 HardFault。可运行镜像必须 `--gc-sections`（census 模式 `--whole-archive` 只链不跑，用于暴露符号缺口）。
 
 ## 平台宏（swinx）
 
@@ -134,3 +170,9 @@ swinx 里判断"是不是 FreeRTOS 平台 / 有没有宿主 OS / 内核原语从
 调用点一律写 `#if SFR_HOSTED` / `#if !SFR_PLATFORM`，两个开关永远有定义（0/1），不再有"未定义即假"的隐式语义；`SOUI_*` 原宏只在该头里出现，其它平台（linux/cocoa/ios/mobile）拿到的是全 0，行为不变。
 
 注意：各工程 `gen/config.h` 由 CMake 生成（`gen/soui_fr` 与 `gen/cairo` 两个目录，同名文件不能同目录），`build*/` 与日志不入库。
+
+## 已知限制
+
+- **模拟器 ≠ 裸机**：`soui_sim` 验证的是逻辑层（消息泵、渲染管线、XML 布局、控件行为、输入路由），不能替代 QEMU 验证裸机启动链（startup / 链接脚本 / newlib 堆锁）、内存布局（`.bss` 段 / FLASH 4MB）、真实中断时序——交付前裸机目标必过。
+- **无内置自动化测试**：交互验证靠人工点击 + 目检，留证用系统截图（详见上文"怎么上手体验"）。
+- **平台层两处与 wizard 的差异**（无 `ICON:` 桩接口、无 `_UNICODE`）见上文"soui_sim 的目录结构"。

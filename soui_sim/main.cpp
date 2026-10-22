@@ -15,11 +15,13 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <windows.h>
 
 #include <SAppCfg.h> // wizard-style application configuration
 
 #include "MainDlg.h"
 #include "soui_sim_hal.h"
+#include "input.h" // SwinxInjectMouse (diagnostic auto-exit path)
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -34,6 +36,11 @@
 // so any non-NULL module handle works -- there is no HINSTANCE from WinMain.
 static const HINSTANCE kAppInstance = (HINSTANCE)1;
 
+
+static void demo_SWinxLogCallback(const char *pLogStr, int level){
+    SLOG("swinx",level)<<pLogStr;
+}
+
 // =============================================================================
 // the application (what a Win32 build would put in _tWinMain)
 // =============================================================================
@@ -45,7 +52,7 @@ static int RunApp(void)
         printf("[app] simulator window init failed\n");
         return -1;
     }
-
+    SetSwinxLogCallback(demo_SWinxLogCallback,0);
     // ---- 2. SApplication + SAppCfg ----------------------------------------
     // Same shape as wizard/CmakeApp/main.cpp: the config object creates the
     // render factory, registers the image decoder, loads the system resources
@@ -83,11 +90,8 @@ static int RunApp(void)
     printf("[app] main window up, hwnd=%p\n", (void *)hWnd);
 
     // ---- 4. message loop ---------------------------------------------------
-    // Whatever you do with the mouse/keyboard in the SDL window is injected
-    // into this hwnd and handled by the real SOUI window code.
     MSG msg;
-    while (IsWindow(hWnd))
-    {
+    while(IsWindow(hWnd)){
         SimHalPumpEvents();    // SDL events -> swinx input
         SimHalRenderIfDirty(); // swinx framebuffer -> SDL texture
 
@@ -106,21 +110,58 @@ static int RunApp(void)
 // =============================================================================
 // FreeRTOS shell
 // =============================================================================
+static int s_appRc = 0; // RunApp() return code, surfaced to main() for exit()
+
 static void app_task(void *)
 {
     int rc = RunApp();
+    s_appRc = rc;
     printf("[app] app task finished (rc=%d)\n", rc);
     fflush(stdout);
-    // Single-application simulator: closing the SOUI window (or the SDL
-    // window) ends the process.  On a real target the task would simply be
-    // deleted and the firmware would keep running.
-    exit(rc);
+    // Single-application simulator: closing the SOUI window ends the process.
+    //
+    // End the scheduler first.  vTaskEndScheduler() deletes the kernel's timer
+    // daemon and idle tasks and flips xPortRunning to FALSE; the main thread's
+    // prvProcessSimulatedInterrupts() then returns out of vTaskStartScheduler()
+    // and main() exits on the *native* thread (no live kernel threads left to
+    // race the static destructors -- the earlier exit()-from-task race).
+    //
+    // CRUCIAL: do NOT let this task function return.  When a task function
+    // returns, the kernel deletes it via vTaskDelete(NULL), whose critical
+    // section exit trips configASSERT( xPortRunning ) in vPortExitCritical
+    // (FreeRTOS-Kernel/portable/MSVC-MingW/port.c:748): the Win32 port asserts
+    // the scheduler is still running while a task is torn down, but we have just
+    // stopped it.  Terminate this thread the same way the port itself deletes
+    // tasks (vPortTaskDelete -> ExitThread(0)) so the assert path is bypassed.
+    // After this no FreeRTOS task thread is alive, and main()'s return tears
+    // the process down cleanly.
+    vTaskEndScheduler();
+    ExitThread(0);
 }
+
+// RtlCaptureStackBackTrace is exported by kernel32; declare it directly (this
+// MinGW-w64's dbghelp.h is broken, so we avoid the header entirely).  ASLR is
+// disabled at link time, so the raw addresses below map straight to the binary.
+extern "C" USHORT WINAPI RtlCaptureStackBackTrace(ULONG FramesToSkip,
+                                                  ULONG FramesToCapture,
+                                                  void **BackTrace,
+                                                  unsigned long *BackTraceHash);
 
 extern "C" void fr_sim_assert(const char *file, int line)
 {
-    printf("FreeRTOS ASSERT at %s:%d\n", file, line);
-    fflush(stdout);
+    fprintf(stderr, "FreeRTOS ASSERT at %s:%d\n", file ? file : "?", line);
+    fflush(stderr);
+
+    // Dump the stack of the thread that tripped the assert as raw return
+    // addresses.  With ASLR disabled they map directly to symbols/offsets in
+    // the binary; resolve offline with:  addr2line -e soui_sim.exe -f -C <addr>
+    const int kMax = 64;
+    void *bt[kMax];
+    USHORT n = RtlCaptureStackBackTrace(1, kMax, bt, NULL);
+    for (USHORT i = 0; i < n; i++)
+        fprintf(stderr, "  #%02u %p\n", i, bt[i]);
+    fflush(stderr);
+    _exit(3);
 }
 
 extern "C" void vApplicationMallocFailedHook(void)
@@ -157,8 +198,7 @@ int main(void)
 
     vTaskStartScheduler();
 
-    for (;;)
-    {
-    }
-    return 0;
+    // app_task ended the scheduler; the C runtime now tears the process down
+    // on the native thread with no live kernel threads to race (see app_task).
+    return s_appRc;
 }
