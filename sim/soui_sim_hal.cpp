@@ -118,7 +118,14 @@ void SimHalPumpEvents(void)
         case SDL_QUIT:
             printf("[sim] SDL_QUIT -- exiting\n");
             fflush(stdout);
-            exit(0);
+            // _exit(): terminate without running C++ static destructors.  The
+            // FreeRTOS-backed std::mutex objects (swinx stl/mutex shim) would
+            // otherwise delete their semaphore in their destructor and call
+            // vPortExitCritical() on the already-stopped scheduler, tripping
+            // the Win32 port's configASSERT( xPortRunning ).  The kernel
+            // (FreeRTOS-Kernel/portable/MSVC-MingW/port.c) is vendored and
+            // intentionally left unmodified, so the teardown fix lives here.
+            _exit(0);
             break;
         case SDL_MOUSEMOTION:
             SwinxInjectMouse(g_targetHwnd, WM_MOUSEMOVE, ev.motion.x, ev.motion.y,

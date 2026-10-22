@@ -95,7 +95,7 @@ soui_fr_link_app(app)                 # 等价于 target_link_libraries(app PRIV
 
 - 入口在原生 `main()` 线程上 `xTaskCreate(app_task, …)` + `vTaskStartScheduler()`；`app_task` 里 `SApplication` + `SAppCfg::DoConfig()` 起 SOUI，然后在 FreeRTOS 任务里跑宿主消息泵——`SimHalPumpEvents()` 把 SDL 事件转成 swinx 输入、`SimHalRenderIfDirty()` 把 swinx 帧缓冲刷到 SDL 纹理，循环条件 `while(IsWindow(hWnd))`。
 - 出图与输入由 `sim/soui_sim_hal.cpp`（SDL2 窗口 / ARGB 纹理 / 鼠标键盘注入）承担，被 `SIM_HOST` 工程复用；与真实 FreeRTOS 目标唯一的差别只是"窗口系统后端"换成了 SDL。
-- **退出路径是确定性的**：窗口 `DestroyWindow` 后 `IsWindow` 落到 `WndMgr` 注册表（窗口已摘除即返回 FALSE），循环退出 → `app_task` 调 `vTaskEndScheduler()` 让内核辅助线程 inert，再以 `ExitThread(0)` 结束自身任务线程；`vTaskStartScheduler()` 返回原生 `main()` 线程，`main()` 正常 `return`。早期版本里 `SConnection::IsWindow` 恒真（循环永不退出）或 `vTaskEndScheduler` 后走 `vTaskDelete` 自删（触发 `port.c` 断言）都已修复。
+- **退出路径是确定性的**：窗口 `DestroyWindow` 后 `IsWindow` 落到 `WndMgr` 注册表（窗口已摘除即返回 FALSE），循环退出 → `app_task` 调 `vTaskEndScheduler()` 让内核辅助线程 inert，再以 `ExitThread(0)` 结束自身任务线程；`vTaskStartScheduler()` 返回原生 `main()` 线程，`main()` 用 `_exit(s_appRc)` 直接终止（不走 `return`）。早期版本里 `SConnection::IsWindow` 恒真（循环永不退出）、`vTaskEndScheduler` 后走 `vTaskDelete` 自删（触发内核 `port.c` 的 `configASSERT(xPortRunning)`）、以及 C++ 静态析构在调度器停转后删除 FreeRTOS 信号量再进 `vPortExitCritical`（同样触发该断言）——都已修复，且修复**全部在 soui-freertos 侧**：`ExitThread(0)` 绕开 `vTaskDelete`、`_exit()` 跳过静态析构（`SDL_QUIT` 分支同样走 `_exit(0)`）。`FreeRTOS-Kernel` 是 vendored 的内核，保持原样不改动。
 
 它与 QEMU 裸机目标**同源同代码**：swinx freertos 平台层、SOUI 应用、XML 布局完全一致，只是出图后端（SDL vs LCD 帧缓冲）和是否在真实内核上跑不同。
 

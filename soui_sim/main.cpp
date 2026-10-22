@@ -133,8 +133,9 @@ static void app_task(void *)
     // the scheduler is still running while a task is torn down, but we have just
     // stopped it.  Terminate this thread the same way the port itself deletes
     // tasks (vPortTaskDelete -> ExitThread(0)) so the assert path is bypassed.
-    // After this no FreeRTOS task thread is alive, and main()'s return tears
-    // the process down cleanly.
+    // After this no FreeRTOS task thread is alive; main() then terminates via
+    // _exit() (see main) without running static destructors, so the stopped
+    // scheduler is never re-entered during teardown.
     vTaskEndScheduler();
     ExitThread(0);
 }
@@ -198,7 +199,16 @@ int main(void)
 
     vTaskStartScheduler();
 
-    // app_task ended the scheduler; the C runtime now tears the process down
-    // on the native thread with no live kernel threads to race (see app_task).
-    return s_appRc;
+    // app_task already ended the scheduler (vTaskEndScheduler() -> xPortRunning
+    // = FALSE) and the native thread now owns process teardown.  We must NOT let
+    // the C runtime run static destructors here: the FreeRTOS-backed
+    // std::mutex / std::recursive_mutex objects from the swinx stl/mutex shim
+    // delete their underlying FreeRTOS semaphore in their destructor, which
+    // calls vPortExitCritical() *after* the scheduler has stopped -- the Win32
+    // port's vPortExitCritical asserts configASSERT( xPortRunning ) in that
+    // state (FreeRTOS-Kernel/portable/MSVC-MingW/port.c).  _exit() terminates
+    // without running static destructors or atexit handlers, so the stopped
+    // scheduler is never touched during teardown.  The kernel file above is
+    // vendored and intentionally left unmodified, so the fix lives here.
+    _exit(s_appRc);
 }
