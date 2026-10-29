@@ -142,11 +142,13 @@ cmake -S <proj> -B <proj>/build -G Ninja && ninja -C <proj>/build
 `soui_fr` / `swinx_test` / `demo` 三个工程交叉编译到 **QEMU mps2-an385（Cortex-M3）**，共用 vendored 内核与 `demo/cmake/toolchain-arm-freertos.cmake`。典型流程：
 
 ```bash
-cd soui-freertos/swinx_test
+cd soui-freertos/soui_fr            # 或 swinx_test / demo
 cmake -S . -B build -G Ninja \
-    -DCMAKE_TOOLCHAIN_FILE=../demo/cmake/toolchain-arm-freertos.cmake
+    -DCMAKE_TOOLCHAIN_FILE=../demo/cmake/toolchain-arm-freertos.cmake \
+    -DSOUI_FR_CENSUS=OFF -DCMAKE_BUILD_TYPE=MinSizeRel   # -Os：否则 text 5.0MB 越 4MB FLASH
 cmake --build build
-qemu-system-arm -M mps2-an385 -nographic -kernel build/swinx_test.elf
+qemu-system-arm -M mps2-an385 -nographic -semihosting -kernel build/soui_fr.elf
+#   -semihosting 是截图（soui_fb.ppm）落盘所必需；缺了它 dump_fb_ppm 会卡住
 # 需要完整跑完读日志：
 qemu-system-arm -M mps2-an385 -kernel build/swinx_test.elf \
     -serial file:C:/temp/qemu.log -display none
@@ -174,5 +176,38 @@ swinx 里判断"是不是 FreeRTOS 平台 / 有没有宿主 OS / 内核原语从
 ## 已知限制
 
 - **模拟器 ≠ 裸机**：`soui_sim` 验证的是逻辑层（消息泵、渲染管线、XML 布局、控件行为、输入路由），不能替代 QEMU 验证裸机启动链（startup / 链接脚本 / newlib 堆锁）、内存布局（`.bss` 段 / FLASH 4MB）、真实中断时序——交付前裸机目标必过。
-- **无内置自动化测试**：交互验证靠人工点击 + 目检，留证用系统截图（详见上文"怎么上手体验"）。
+- **交互验证仍靠人工**：`soui_sim` 里的点击/目检没有上界，留证用系统截图（详见上文"怎么上手体验"）；
+  无头取证可用 `SOUI_SIM_DUMP_FRAME=<n>` 让模拟器把第 n 帧写进 `sim_frame.bmp`（默认不写）。
+  裸机侧已有一条机器门禁（`.github/workflows/soui-freertos-gate.yml`）：census 链接（0 未定义符号）
+  → `-Os` 可运行镜像（`text` 必须 < 4MB）→ QEMU 实跑断言 `SOUISAPP FREERTOS DONE`
+  → 校验收到的 PPM 是 320x240 且不是空帧。它证明"启动链 + 渲染落笔"每天都能复现，
+  不证明画面好不好看。
+- **可运行镜像必须开优化**：同一份源码 `-O0` 的 `text` 是 5.0MB，越过 mps2-an385 的 4MB FLASH，
+  QEMU 上表现为复位即 HardFault（"can't escalate 3 to HardFault"）；`-DCMAKE_BUILD_TYPE=MinSizeRel`
+  后是 2.4MB。构建脚本/CI 一律用 `MinSizeRel`，不要拿调试构建去跑 QEMU。
+- **`soui_sim` 的宿主构建依赖 swinx 里 2026-10-29 的头部修复**：swinx 1.8 的 WKE 适配
+  （`aee0bc8`）把 `HWND` 等句柄改成 `struct XXX__ *` 以对齐 Windows SDK，同时新增了
+  `swinx/include/io.h` 与 `strapi.h` 的 `struct _timeb`。这三处在宿主构建（`SFR_HOSTED=1`）
+  上会和 MinGW 自带的 CRT 相撞：`io.h` 遮蔽真头文件导致 `<unistd.h>` 内联 `ftruncate()`
+  找不到 `_chsize`；`_timeb` 在 MinGW 是宏（`__timeb64`）已由 `<sys/timeb.h>` 定义过；
+  `sim/soui_sim_hal.cpp` 里手写的 `unsigned long long` 与指针型 `HWND` 符号不匹配。
+  现修法：`io.h` 在宿主上 `#include_next` 交给真实头文件，`struct _timeb`/`_ftime` 与
+  `ftruncate` 桩只在 `!SFR_HOSTED` 下定义，注入接口按 `struct HWND__ *` 声明。
+  验证（gcc 15.2.0 / cmake 4.x / ninja，洁净构建）：`-j1` 与 `-j8` 均 0 error 0 warning，
+  进程启动到标题为 `SOUI5 on FreeRTOS (Windows simulator)` 的窗口，并渲染出完整主界面。
+  **这跟并行编译无关**：串行构建同样失败，问题全在上面三处头文件/签名。`soui_sim` 仍**不在 CI 内**（要桌面会话）。
+- **宿主构建里 `stricmp` 家族宏会自递归成死循环（已修，2026-10-29）**：构建成功、窗口能开，但客户区
+  一直空白、CPU 占满一核。根因是宏循环：MinGW 的 `<string.h>` 把 `strcasecmp` 实现成
+  `__CRT_INLINE … { return _stricmp(…); }`，而 `swinx/include/strapi.h` 又定义
+  `_stricmp(s1,s2) → stricmp(s1,s2) → strcasecmp(s1,s2)`，于是那个内联函数的函数体被改写成了
+  "调用自己"。gcc `-O3` 把这条自递归尾调用折叠成 `jmp $`，任何大小写无关比较都变成原地死转
+  （首个中招的是 `ClassMgr::find_class` → `SApplication` 构造阶段的窗口类注册，所以连
+  `soui_app.cpp` 里的第一句日志都出不来）。修法：`strapi.h` 把整个大小写无关比较族
+  （`stricmp/strnicmp/_stricmp/_strnicmp` 与 `_wcsicmp/_wcsnicmp`）收进**一张统一的宏表**，
+  由 `SFR_HOSTED && _WIN32` 一个开关决定：宿主 + Windows 时六个别名全部定义成恒等宏
+  （`#define _stricmp(s1,s2) _stricmp(s1,s2)`），让 CRT 的内联包装继续调真实符号；其余目标
+  （POSIX 宿主、裸机、WASM）映射到 `strcasecmp/wcscasecmp`。原先 `_wcsicmp` 与 `stricmp`
+  各用一个开关、条件还不一致，属于同一判定的重复表达，已合并。定位手法：`gdb --pid` 附加后
+  反汇编落点，看到 `jmp <自身>` 即可确认是宏循环而非锁竞争（锁竞争在 Win32 端口上是阻塞，
+  CPU 不会满）。
 - **平台层两处与 wizard 的差异**（无 `ICON:` 桩接口、无 `_UNICODE`）见上文"soui_sim 的目录结构"。

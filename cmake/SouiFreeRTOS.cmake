@@ -418,10 +418,13 @@ function(soui_fr_add_swinx)
     set(SWINX_DIR "${SOUI_FR_SWINX_DIR}")
     # src/platform/posix/ holds the POSIX system-API implementations; it is
     # deliberately NOT globbed here (same as the ARM target).
-    file(GLOB SWINX_CORE_SRCS "${SWINX_DIR}/src/*.cpp")
+    # CONFIGURE_DEPENDS: swinx/SOUI 都是活跃开发的子模块，新增 .cpp 时必须自动
+    # 重新 glob。否则已配置过的构建目录会继续用旧的源列表——典型症状是链接期
+    # "undefined reference to SwinxXxx"（新文件没进归档），而洁净构建却是好的。
+    file(GLOB SWINX_CORE_SRCS CONFIGURE_DEPENDS "${SWINX_DIR}/src/*.cpp")
     list(REMOVE_ITEM SWINX_CORE_SRCS
         "${SWINX_DIR}/src/wgl.cpp")   # GL headers only exist on the host
-    file(GLOB SWINX_CMNCTL_SRCS
+    file(GLOB SWINX_CMNCTL_SRCS CONFIGURE_DEPENDS
         "${SWINX_DIR}/src/cmnctl32/*.cpp" "${SWINX_DIR}/src/cmnctl32/*.c")
 
     if(NOT SOUI_FR_SWINX_PLATFORM_SRCS)
@@ -484,15 +487,15 @@ function(soui_fr_add_soui)
     target_link_libraries(utilities4_fr PUBLIC soui_fr_platform)
 
     # ---- SOUI core ---------------------------------------------------------
-    file(GLOB SOUI_CORE_SRCS   "${SOUI_DIR}/src/core/*.cpp")
-    file(GLOB SOUI_RESMGR_SRCS "${SOUI_DIR}/src/res.mgr/*.cpp")
-    file(GLOB SOUI_HELPER_SRCS "${SOUI_DIR}/src/helper/*.cpp")
-    file(GLOB SOUI_LAYOUT_SRCS "${SOUI_DIR}/src/layout/*.cpp")
-    file(GLOB SOUI_MATRIX_SRCS "${SOUI_DIR}/src/matrix/*.cpp")
-    file(GLOB SOUI_EVENT_SRCS  "${SOUI_DIR}/src/event/*.cpp")
-    file(GLOB SOUI_ANIM_SRCS   "${SOUI_DIR}/src/animation/*.cpp")
-    file(GLOB SOUI_VANIM_SRCS  "${SOUI_DIR}/src/valueAnimator/*.cpp")
-    file(GLOB SOUI_CTRL_SRCS   "${SOUI_DIR}/src/control/*.cpp")
+    file(GLOB SOUI_CORE_SRCS   CONFIGURE_DEPENDS "${SOUI_DIR}/src/core/*.cpp")
+    file(GLOB SOUI_RESMGR_SRCS CONFIGURE_DEPENDS "${SOUI_DIR}/src/res.mgr/*.cpp")
+    file(GLOB SOUI_HELPER_SRCS CONFIGURE_DEPENDS "${SOUI_DIR}/src/helper/*.cpp")
+    file(GLOB SOUI_LAYOUT_SRCS CONFIGURE_DEPENDS "${SOUI_DIR}/src/layout/*.cpp")
+    file(GLOB SOUI_MATRIX_SRCS CONFIGURE_DEPENDS "${SOUI_DIR}/src/matrix/*.cpp")
+    file(GLOB SOUI_EVENT_SRCS  CONFIGURE_DEPENDS "${SOUI_DIR}/src/event/*.cpp")
+    file(GLOB SOUI_ANIM_SRCS   CONFIGURE_DEPENDS "${SOUI_DIR}/src/animation/*.cpp")
+    file(GLOB SOUI_VANIM_SRCS  CONFIGURE_DEPENDS "${SOUI_DIR}/src/valueAnimator/*.cpp")
+    file(GLOB SOUI_CTRL_SRCS   CONFIGURE_DEPENDS "${SOUI_DIR}/src/control/*.cpp")
 
     # Not portable to this port: accessibility/COM hosting and the
     # Android/OHOS resource providers.

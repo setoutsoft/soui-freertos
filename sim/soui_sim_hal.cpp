@@ -21,10 +21,16 @@ int SwinxFbStride(void);
 void SwinxSetFbPresentCb(void (*cb)(const void *dirty));
 }
 
-// input.h symbols are plain C++ (no extern "C" there); declare with matching
-// types so the mangled names line up (HWND/WPARAM are integers in the shim).
-void SwinxInjectMouse(unsigned long long hWnd, unsigned int message, int x, int y, unsigned long long fwKeys);
-void SwinxInjectKey(unsigned long long hWnd, unsigned int message, unsigned int vk, unsigned int scanCode);
+// input.h symbols are plain C++ (no extern "C" there), so the declarations
+// below have to produce the same mangled names.  input.h itself cannot be
+// included (it pulls the swinx <windows.h> shim, and SDL.h above has
+// already brought in the real one), so repeat its signatures -- including
+// the handle type: swinx models HWND as an opaque `struct HWND__ *` to
+// match the Windows SDK, and declaring it as an integer no longer links.
+struct HWND__;
+typedef struct HWND__ * HWND;
+void SwinxInjectMouse(HWND hWnd, unsigned int message, int x, int y, unsigned long long fwKeys);
+void SwinxInjectKey(HWND hWnd, unsigned int message, unsigned int vk, unsigned int scanCode);
 
 // Win32 message ids used for injection (values from the swinx shim)
 static const unsigned int WM_MOUSEMOVE = 0x0200;
@@ -40,7 +46,7 @@ static const unsigned long long MK_RBUTTON = 0x0002;
 static SDL_Window *g_win = NULL;
 static SDL_Renderer *g_ren = NULL;
 static SDL_Texture *g_tex = NULL;
-static void *g_targetHwnd = NULL;
+static HWND  g_targetHwnd = NULL;
 
 // fb snapshot written by the present callback (same thread as the UI pump),
 // consumed by SimHalRenderIfDirty on the next pump tick.  Size must match
@@ -105,7 +111,7 @@ int SimHalInit(void)
 
 void SimHalSetTargetHwnd(void *hWnd)
 {
-    g_targetHwnd = hWnd;
+    g_targetHwnd = (HWND )hWnd;
 }
 
 void SimHalPumpEvents(void)
@@ -171,5 +177,26 @@ int SimHalRenderIfDirty(void)
     SDL_RenderClear(g_ren);
     SDL_RenderCopy(g_ren, g_tex, NULL, NULL);
     SDL_RenderPresent(g_ren);
+
+    // Optional headless check: SOUI_SIM_DUMP_FRAME=<n> writes the n-th
+    // presented frame to sim_frame.bmp so a CI run can assert on real pixels
+    // (the QEMU target dumps a PPM the same way).  Unset = no effect.
+    static int s_dumpAt = -1;
+    if (s_dumpAt < 0)
+    {
+        const char *pEnv = getenv("SOUI_SIM_DUMP_FRAME");
+        s_dumpAt = pEnv ? atoi(pEnv) : 0;
+    }
+    if (s_dumpAt > 0 && g_presents == s_dumpAt)
+    {
+        SDL_Surface *pSurf = SDL_CreateRGBSurfaceWithFormatFrom(
+            g_snap, g_fbW, g_fbH, 32, g_fbW * sizeof(uint32_t), SDL_PIXELFORMAT_ARGB8888);
+        if (pSurf)
+        {
+            SDL_SaveBMP(pSurf, "sim_frame.bmp");
+            SDL_FreeSurface(pSurf);
+            printf("[sim] frame #%d dumped to sim_frame.bmp\n", g_presents);
+        }
+    }
     return 1;
 }
