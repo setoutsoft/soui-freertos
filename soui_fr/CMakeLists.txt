@@ -19,12 +19,15 @@ set(CMAKE_CXX_STANDARD 11)
 # for uniformity with soui_sim's MinGW host build where the builtin is 2).
 add_compile_definitions(WCHAR_SIZE=__SIZEOF_WCHAR_T__)
 
-# SOUI source tree: submodule layout (soui4/soui-freertos/soui_fr) resolves
-# ../..; standalone D:/work layout is the fallback.
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../../SOUI)
-    set(SOUI_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
-else()
-    set(SOUI_ROOT     D:/work/soui4)
+# SOUI source tree: soui_fr sits at <soui4>/soui-freertos/soui_fr, so ../.. is
+# the soui4 root.  Fixed by the submodule layout -- no probing, and no
+# developer-machine path to fall back to (that fallback is what pointed CI at
+# D:/work/soui4, a tree that was never checked out).
+get_filename_component(SOUI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+if(NOT EXISTS "${SOUI_ROOT}/SOUI/include/souistd.h")
+    message(FATAL_ERROR
+        "[soui_fr] ${SOUI_ROOT} 下没有 SOUI/include/souistd.h。"
+        "soui_fr 必须位于 soui4 工作目录下的 soui-freertos/ 中。")
 endif()
 set(FREERTOS_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/../FreeRTOS-Kernel)
 set(DEMO_DIR      ${CMAKE_CURRENT_SOURCE_DIR}/../demo)

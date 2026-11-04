@@ -21,7 +21,8 @@ SOUI4/SOUI5 移植 FreeRTOS 的全部实验工程。上游源码在 `D:/work/sou
 
 ## 外部依赖（不在本仓库）
 
-- `D:/work/soui4` — SOUI/swinx 源码（`SOUI_FR_ROOT` 引用）
+- soui4 工作目录 — SOUI/swinx 源码。本仓库是 soui4 的子模块，固定检出在 `<soui4>/soui-freertos`，
+  `SOUI_FR_ROOT` 由本文件位置推得（`cmake/` 往上两级），不用环境变量、也不写死盘符
 - MSYS2 mingw64（gcc 15.2.0、SDL2、cmake+ninja）；QEMU（qemu-system-arm，mps2-an385）+ arm-none-eabi 工具链（QEMU 三工程）
 
 FreeRTOS 内核默认用本仓库 vendored 的 `FreeRTOS-Kernel/`（含 `portable/MSVC-MingW`，soui_sim 直接复用），不再需要外部 `lvgl_simulator` 那份。
@@ -49,7 +50,7 @@ soui_fr_project(hello_freertos SOURCES main.cpp SIM_HOST)
 | 三方库 | cairo/pixman/libpng/zlib，宿主默认用系统包（pkg-config 能证明时），交叉编译强制 vendored 源码 |
 | 平台层 | swinx freertos 层（`src/*.cpp` + `platform/freertos/*` + cairo gdi 后端/字体桥） |
 | SOUI | utilities + core + render-gdi + imgdecoder-stb（whole-archive 保留 COM 注册对象） |
-| 资源 | `uires/uires.idx` → uiresbuilder → windres COFF → `.incbin` 数据段（`.balign 4`，Cortex-M 非对齐会 fault） |
+| 资源 | `uires/uires.idx` → uiresbuilder → windres COFF → `.incbin` 数据段（`.balign 4`，Cortex-M 非对齐会 fault）。只有 uiresbuilder 那一步是 Windows 独占（`tools/uiresbuilder.exe`）；windres/incbin 任何装了 mingw 的宿主都能跑。产物 `soui_res.rc2` + `resource.h` 输出到源码目录 `<项目>/<name>_res/` 并**入库**，所以换平台/换机器直接复用，不必先在 Windows 上过一遍 |
 | 启动 | 和 wizard 工程一样自己写：`SApplication` + `SAppCfg`（`SetRender(Render_Gdi)` / `SetImgDecoder(ImgDecoder_Stb)` / `SetSysResPeHandle` / `SetAppResPeHandle`）→ `cfg.DoConfig(&app)`；`SAppCfg` 内部把 render-gdi 工厂与 imgdecoder-stb 一起注册好（缺后者会在 `LoadSystemNamedResource` 里解码系统皮肤时静默段错误），不再是框架提供的"启动胶水" |
 | 宿主出图 | `SIM_HOST` 时链 `sim/soui_sim_hal.cpp`（SDL2 窗口 / ARGB 纹理 / 鼠标键盘注入） |
 | Windows 运行 | system-deps 构建自动把 20 个运行时 DLL 收拢到 exe 同级 |

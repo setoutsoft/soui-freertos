@@ -1,0 +1,4 @@
+# uiresbuilder 产物（soui_res.rc2 / resource.h）按原始字节入库。
+# 这两个文件的混合行尾是工具输出的特征，若交给 core.autocrlf=true 转换，
+# 每次构建重新生成后 git 都会显示"资源文件被修改"。
+**/*_res/*  -text

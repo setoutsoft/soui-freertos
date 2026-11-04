@@ -30,8 +30,9 @@
 #                            instead of compiling the vendored sources.
 #                            Cross builds (ARM) always use the vendored sources:
 #                            a bare-metal image must not depend on host packages.
-#   SOUI_FR_ROOT             SOUI source tree (default: auto-detect)
-#   SOUI_FR_FREERTOS_DIR     FreeRTOS kernel (default: <soui-freertos>/FreeRTOS-Kernel)
+#   SOUI_FR_ROOT             soui4 source tree; fixed at <this file>/../.. --
+#                            soui-freertos is a submodule of soui4, not movable
+#   SOUI_FR_FREERTOS_DIR     FreeRTOS kernel; fixed at <soui-freertos>/FreeRTOS-Kernel
 #   SOUI_FR_CONFIG_DIR       directory holding FreeRTOSConfig.h (consumer sets it)
 #   SOUI_FR_WARNINGS         keep compiler warnings (default OFF: -w)
 #
@@ -53,14 +54,18 @@ get_filename_component(SOUI_FR_ENV_DIR "${SOUI_FR_CMAKE_DIR}" DIRECTORY)
 # -----------------------------------------------------------------------------
 # source tree / kernel / toolchain facts
 # -----------------------------------------------------------------------------
-if(NOT SOUI_FR_ROOT)
-    if(EXISTS "${SOUI_FR_ENV_DIR}/../../SOUI/include/souistd.h")
-        set(SOUI_FR_ROOT "${SOUI_FR_ENV_DIR}/../..")   # submodule layout
-    else()
-        set(SOUI_FR_ROOT "D:/work/soui4")              # standalone layout
-    endif()
+# soui-freertos 是 soui4 的子模块，位置固定为 <soui4>/soui-freertos：本文件在
+# <soui4>/soui-freertos/cmake/ 下，往上两级就是 soui4 工作目录的根。
+# 只有一级相对推导 + 一个存在性检查，不做任何环境变量/盘符回落
+# （旧的回落写死 "D:/work/soui4"，CI 检出在别的路径时会对着不存在的树找
+#  uiresbuilder.exe，报一个与真实原因无关的错）。
+get_filename_component(SOUI_FR_ROOT "${SOUI_FR_ENV_DIR}/.." ABSOLUTE)
+if(NOT EXISTS "${SOUI_FR_ROOT}/SOUI/include/souistd.h")
+    message(FATAL_ERROR
+        "[soui_fr] ${SOUI_FR_ROOT} 下没有 SOUI/include/souistd.h。"
+        "soui-freertos 是 soui4 的子模块，必须检出在 soui4 工作目录下"
+        "（<soui4>/soui-freertos）。")
 endif()
-set(SOUI_FR_ROOT "${SOUI_FR_ROOT}" CACHE PATH "SOUI source tree")
 
 # Generated headers for this build.  Two separate directories on purpose:
 #   gen/soui_fr  -- the SOUI build-flag config.h pulled in by utilities-def.h
@@ -83,14 +88,13 @@ set(SOUI_FR_SWINX_DIR "${SOUI_FR_ROOT}/swinx")
 set(SOUI_FR_SOUI_DIR  "${SOUI_FR_ROOT}/SOUI")
 set(SOUI_FR_UTIL_DIR  "${SOUI_FR_ROOT}/utilities")
 
-if(NOT SOUI_FR_FREERTOS_DIR)
-    if(EXISTS "${SOUI_FR_ENV_DIR}/FreeRTOS-Kernel/tasks.c")
-        set(SOUI_FR_FREERTOS_DIR "${SOUI_FR_ENV_DIR}/FreeRTOS-Kernel")
-    else()
-        set(SOUI_FR_FREERTOS_DIR "D:/work/lvgl_simulator/FreeRTOS")
-    endif()
+# FreeRTOS 内核是 soui-freertos 的子模块，位置固定为 <soui4>/soui-freertos/FreeRTOS-Kernel。
+set(SOUI_FR_FREERTOS_DIR "${SOUI_FR_ENV_DIR}/FreeRTOS-Kernel")
+if(NOT EXISTS "${SOUI_FR_FREERTOS_DIR}/tasks.c")
+    message(FATAL_ERROR
+        "[soui_fr] ${SOUI_FR_FREERTOS_DIR} 下没有 tasks.c。请执行 "
+        "git submodule update --init soui-freertos/FreeRTOS-Kernel")
 endif()
-set(SOUI_FR_FREERTOS_DIR "${SOUI_FR_FREERTOS_DIR}" CACHE PATH "FreeRTOS kernel")
 
 # Host (desktop simulator) vs bare-metal target.  Everything below keys off
 # this instead of the four different preprocessor macros the C++ side used to
