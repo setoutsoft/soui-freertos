@@ -6,7 +6,7 @@
  * SOUI headers (<sdef.h> for SSingleton2.h, <helper/SAttrCracker.h> for
  * SAnimation.h); those were fixed upstream with explicit #includes (2026-10-04)
  * so the entries are gone.  What remains:
- *   * <climits>/<cstdint> -- newlib does not transitively provide them the
+ *   * <cstdint> -- newlib does not transitively provide them the
  *     way MSVC/glibc toolchains do; other toolchain-wide gaps can be added
  *     here as they surface.
  *   * <swinx_stl.h> -- the FreeRTOS STL shims (<thread>/<mutex>/...) folded
@@ -16,7 +16,6 @@
 #ifndef SWINX_FR_SOUI_COMPAT_H_
 #define SWINX_FR_SOUI_COMPAT_H_
 
-#include <climits>
 #include <cstdint>
 
 #include <swinx_stl.h>
