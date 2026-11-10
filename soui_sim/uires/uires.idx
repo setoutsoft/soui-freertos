@@ -12,6 +12,7 @@
 	</PNG>
 	<SVG>
 		<file name="TEST_SVG" path="svg\test.svg" />
+		<file name="focus_ani" path="svg\focus_ani.svg" />
 	</SVG>
 	<values>
 		<file name="string" path="values\string.xml" />

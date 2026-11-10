@@ -3,4 +3,7 @@
   <!-- Application skin objects.  A skin declared here can be used by name from
        any layout (skin="app_logo") or from code via GETSKIN(L"app_logo", 100). -->
   <imglist name="app_logo" src="PNG:LOGO_PNG"/>
+  <!-- 焦点移动动画框(root 节点的 focusAniSkin,配合 animator:duration/interpolator):
+       必须关掉 cacheSvg —— 每次焦点变化都按目标窗口的矩形重新矢量绘制,缓存成位图会被拉伸失真 -->
+  <imgframe name="skin_focus_ani" src="svg:focus_ani" cacheSvg="0" margin-x="6" margin-y="6"/>
 </skin>

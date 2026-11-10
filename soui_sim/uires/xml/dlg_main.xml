@@ -10,7 +10,9 @@
     * text styles (cls_txt_title / cls_txt_sub) come from uidef/init.xml.
 -->
 <SOUI name="mainWindow" title="@string/title" wndType="appMain" appWnd="1" margin="0" resizable="0" translucent="0">
-  <root skin="_skin.sys.wnd.bkgnd" cache="1" width="320" height="240">
+  <root skin="_skin.sys.wnd.bkgnd" cache="1" width="320" height="240"
+        focusAniSkin="skin_focus_ani" focusAni:duration="200" focusAni:interpolator="Decelerate"
+        fade:duration="200" fade:interpolator="Accelerate">
     <!-- simulated title bar -->
     <caption pos="0,0,-0,28" font="adding:2" layout="hbox" gravity="center" padding_left="10">
       <img skin="app_logo" size="16,16"/>

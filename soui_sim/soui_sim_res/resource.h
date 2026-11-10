@@ -1,4 +1,4 @@
-﻿//stamp:07758536acb3b02d
+﻿//stamp:077594a122fbcbc7
 /*<------------------------------------------------------------------------------------------------->*/
 /*该文件由uiresbuilder生成，请不要手动修改*/
 /*<------------------------------------------------------------------------------------------------->*/
@@ -17,6 +17,7 @@
 			}PNG;
 		struct _SVG{
 			const TCHAR * TEST_SVG;
+			const TCHAR * focus_ani;
 			}SVG;
 		struct _values{
 			const TCHAR * string;
@@ -39,6 +40,7 @@ struct _UIRES UIRES={
 		},
 		{
 			_T("SVG:TEST_SVG"),
+			_T("SVG:focus_ani"),
 		},
 		{
 			_T("values:string"),
