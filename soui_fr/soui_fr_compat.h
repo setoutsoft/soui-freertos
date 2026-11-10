@@ -16,8 +16,6 @@
 #ifndef SWINX_FR_SOUI_COMPAT_H_
 #define SWINX_FR_SOUI_COMPAT_H_
 
-#include <cstdint>
-
 #include <swinx_stl.h>
 
 #endif // SWINX_FR_SOUI_COMPAT_H_
