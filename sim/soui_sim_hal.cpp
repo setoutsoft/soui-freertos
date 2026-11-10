@@ -66,8 +66,39 @@ static void fb_present_cb(const void *dirty)
     (void)dirty;
     memcpy(g_snap, SwinxFbBits(), sizeof(uint32_t) * g_fbW * g_fbH);
     g_dirty = 1;
-    if (g_presents++ == 0)
+    ++g_presents;
+    if (g_presents == 1)
         printf("[sim] first frame presented\n");
+
+    // Optional headless check: SOUI_SIM_DUMP_FRAME=<n> writes the n-th
+    // presented frame to sim_frame.bmp so a CI run can assert on real pixels
+    // (the QEMU target dumps a PPM the same way).  Unset = no effect.
+    //
+    // This must happen HERE, not in SimHalRenderIfDirty(): one UpdateWindow
+    // may call commitCanvas/present several times (each ReleaseDC blits once)
+    // before the next pump tick, so checking g_presents later with "==" can
+    // skip the requested frame forever.  The callback is 1:1 with a present.
+    static int s_dumpAt = -1;
+    if (s_dumpAt < 0)
+    {
+        const char *pEnv = getenv("SOUI_SIM_DUMP_FRAME");
+        s_dumpAt = pEnv ? atoi(pEnv) : 0;
+        printf("[sim] dumpAt=%d (SOUI_SIM_DUMP_FRAME=%s)\n",
+               s_dumpAt, pEnv ? pEnv : "(unset)");
+    }
+    if (s_dumpAt > 0 && g_presents == s_dumpAt)
+    {
+        SDL_Surface *pSurf = SDL_CreateRGBSurfaceWithFormatFrom(
+            g_snap, g_fbW, g_fbH, 32, g_fbW * sizeof(uint32_t), SDL_PIXELFORMAT_ARGB8888);
+        if (pSurf)
+        {
+            if (SDL_SaveBMP(pSurf, "sim_frame.bmp") == 0)
+                printf("[sim] frame #%d dumped to sim_frame.bmp\n", s_dumpAt);
+            else
+                printf("[sim] frame #%d dump failed: %s\n", s_dumpAt, SDL_GetError());
+            SDL_FreeSurface(pSurf);
+        }
+    }
 }
 
 int SimHalInit(void)
@@ -177,26 +208,5 @@ int SimHalRenderIfDirty(void)
     SDL_RenderClear(g_ren);
     SDL_RenderCopy(g_ren, g_tex, NULL, NULL);
     SDL_RenderPresent(g_ren);
-
-    // Optional headless check: SOUI_SIM_DUMP_FRAME=<n> writes the n-th
-    // presented frame to sim_frame.bmp so a CI run can assert on real pixels
-    // (the QEMU target dumps a PPM the same way).  Unset = no effect.
-    static int s_dumpAt = -1;
-    if (s_dumpAt < 0)
-    {
-        const char *pEnv = getenv("SOUI_SIM_DUMP_FRAME");
-        s_dumpAt = pEnv ? atoi(pEnv) : 0;
-    }
-    if (s_dumpAt > 0 && g_presents == s_dumpAt)
-    {
-        SDL_Surface *pSurf = SDL_CreateRGBSurfaceWithFormatFrom(
-            g_snap, g_fbW, g_fbH, 32, g_fbW * sizeof(uint32_t), SDL_PIXELFORMAT_ARGB8888);
-        if (pSurf)
-        {
-            SDL_SaveBMP(pSurf, "sim_frame.bmp");
-            SDL_FreeSurface(pSurf);
-            printf("[sim] frame #%d dumped to sim_frame.bmp\n", g_presents);
-        }
-    }
     return 1;
 }

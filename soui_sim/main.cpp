@@ -90,8 +90,22 @@ static int RunApp(void)
     printf("[app] main window up, hwnd=%p\n", (void *)hWnd);
 
     // ---- 4. message loop ---------------------------------------------------
+    // Headless CI: SOUI_SIM_AUTOEXIT=1 asks the pump to close the main window
+    // after ~60 ticks.  The dummy SDL driver produces no input at all, so
+    // without this IsWindow(hWnd) stays TRUE forever and the job dies on its
+    // timeout instead of failing with a reason.  Post WM_CLOSE through the
+    // queue; calling DestroyWindow() synchronously inside the pump deadlocks
+    // without a real event loop.
+    const char *pAutoExit = getenv("SOUI_SIM_AUTOEXIT");
+    const int autoExitTicks = (pAutoExit && atoi(pAutoExit) > 0) ? 60 : 0;
+    const int autoExitGrace = 60; // ticks to wait for WM_CLOSE to take effect
+    int pumpTicks = 0;
+    int closePostedAt = 0;       // 0 = not posted yet
     MSG msg;
     while(IsWindow(hWnd)){
+        ++pumpTicks;
+        if (pumpTicks == 1)
+            printf("[sim] message pump started\n");
         SimHalPumpEvents();    // SDL events -> swinx input
         SimHalRenderIfDirty(); // swinx framebuffer -> SDL texture
 
@@ -99,6 +113,19 @@ static int RunApp(void)
         {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
+        }
+        if (autoExitTicks && !closePostedAt && pumpTicks >= autoExitTicks)
+        {
+            closePostedAt = pumpTicks;
+            printf("[sim] autoexit: posting WM_CLOSE at tick %d\n", pumpTicks);
+            PostMessage(hWnd, WM_CLOSE, 0, 0);
+        }
+        else if (closePostedAt && pumpTicks - closePostedAt > autoExitGrace)
+        {
+            // Fail fast instead of hanging the CI job for another hour.
+            printf("[sim] autoexit: window alive %d ticks after WM_CLOSE\n", autoExitGrace);
+            fflush(stdout);
+            _exit(2);
         }
         vTaskDelay(pdMS_TO_TICKS(8));
     }

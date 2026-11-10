@@ -127,7 +127,7 @@ cmake -S <proj> -B <proj>/build -G Ninja && ninja -C <proj>/build
 
 窗口起来后直接**用鼠标点**：悬停 `btn_test` / `btn_anim` 看 hover 与 `animate="1"` 的淡入，按住看 push 态，点 `btn_test` 在 PNG / SVG 之间换图（走 `EVENT_ID_COMMAND(R.id.btn_test)`），点 `btn_anim` 冻结时间轴动画；标题栏右侧的最小化/关闭是 `_skin.sys.*` 系统皮肤。这就是全部——输入走 SDL → swinx → 真实 SOUI 窗口代码，没有任何脚本注入或像素比对环节。
 
-模拟器不再内置自动化测试：交互就是人点、眼睛看。要做回归时，验证点本身是"点一下，界面有没有对"；需要留证据就系统截图（Win+Shift+S）。
+模拟器不内置交互自动化测试：交互就是人点、眼睛看。要做回归时，验证点本身是"点一下，界面有没有对"；需要留证据就系统截图（Win+Shift+S）。CI 只用 `SOUI_SIM_AUTOEXIT` / `SOUI_SIM_DUMP_FRAME` 两个开关做"能起窗、能画一帧、能干净退出"的冒烟，不代替交互验证。
 
 `soui_sim/screenshots/` 存定妆图（如 `00_idle.png`）；需要更多证据用系统截图（Win+Shift+S）。
 
@@ -135,7 +135,7 @@ cmake -S <proj> -B <proj>/build -G Ninja && ninja -C <proj>/build
 
 - **无窗口 / 秒退（`0xc0000139`，进不了 `main()`）**：PATH 里另一套 MinGW（PortableGit / Android platform-tools / xampp）的 `libwinpthread-1.dll` / `zlib1.dll` / `libiconv-2.dll` 影子掉了 exe 旁边的同名 DLL。`SOUI_FR_USE_SYSTEM_DEPS=ON` 构建会自动把运行时 DLL 收拢到 exe 同级（exe 目录优先级最高），或把冲突目录从 PATH 移除。
 - **内核断言不再自旋**：`fr_sim_assert`（FreeRTOS `configASSERT` 落点）已从 `for(;;)` 自旋改为 `RtlCaptureStackBackTrace` 打印原始返回地址后 `_exit(3)`。复现时抓到地址后用 `addr2line -e soui_sim.exe -f -C <addr>` 离线定位（构建链了 `--disable-dynamicbase`，地址可对照；该选项是生成文件，重生成即失）。
-- **无显示环境下触发关闭 / 退出**：设 `SOUI_SIM_AUTOEXIT=1`，消息泵迭代约 60 次后自动注入关闭按钮点击，可 headless 跑通"关闭 → 退出"整条路径（**不要**在泵里直接 `DestroyWindow`，无真实事件泵时会同步死锁）。
+- **无显示环境下触发关闭 / 退出**：设 `SOUI_SIM_AUTOEXIT=1`，消息泵迭代约 60 次后向主窗口 `PostMessage(WM_CLOSE)`（swinx 默认窗口过程 `DefWindowProc` 收到后调 `DestroyWindow`，`IsWindow()` 随之变假，走完"关闭 → 退出"）。**不要**在泵里直接 `DestroyWindow`，无真实事件泵时会同步死锁。若投递后再过 60 次迭代窗口仍未销毁，打印告警并以退出码 2 终止，避免 CI 挂死。
 - **gdb 注入鼠标事件**：`SwinxInjectMouse((unsigned long long)hwnd, msg, x, y, down)` 可向目标窗口投递 `WM_MOUSEMOVE`(0x0200) / `WM_LBUTTONDOWN`(0x0201) / `WM_LBUTTONUP`(0x0202)，用于在无头环境复现点击交互与 teardown。
 
 ## 裸机目标与 QEMU 实跑
@@ -178,7 +178,7 @@ swinx 里判断"是不是 FreeRTOS 平台 / 有没有宿主 OS / 内核原语从
 
 - **模拟器 ≠ 裸机**：`soui_sim` 验证的是逻辑层（消息泵、渲染管线、XML 布局、控件行为、输入路由），不能替代 QEMU 验证裸机启动链（startup / 链接脚本 / newlib 堆锁）、内存布局（`.bss` 段 / FLASH 4MB）、真实中断时序——交付前裸机目标必过。
 - **交互验证仍靠人工**：`soui_sim` 里的点击/目检没有上界，留证用系统截图（详见上文"怎么上手体验"）；
-  无头取证可用 `SOUI_SIM_DUMP_FRAME=<n>` 让模拟器把第 n 帧写进 `sim_frame.bmp`（默认不写）。
+  无头取证可用 `SOUI_SIM_DUMP_FRAME=<n>` 让模拟器把第 n 次 present 回调的帧缓冲写进 `sim_frame.bmp`（默认不写）。dump 在 present 回调里按序号完成，不依赖消息泵 tick；一次 `UpdateWindow` 可能触发多次 `commitCanvas`（每次 `ReleaseDC` 一次），所以"第 n 帧"指第 n 次提交，不是第 n 次刷新屏幕。
   裸机侧已有一条机器门禁（`.github/workflows/soui-freertos-gate.yml`）：census 链接（0 未定义符号）
   → `-Os` 可运行镜像（`text` 必须 < 4MB）→ QEMU 实跑断言 `SOUISAPP FREERTOS DONE`
   → 校验收到的 PPM 是 320x240 且不是空帧。它证明"启动链 + 渲染落笔"每天都能复现，
