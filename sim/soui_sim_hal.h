@@ -30,4 +30,7 @@ void SimHalSetTargetHwnd(void *hWnd);
  * returns 1 when a frame was presented. */
 int SimHalRenderIfDirty(void);
 
+/* snapshot the framebuffer to path (.bmp); >0 on success */
+int SimHalDumpNow(const char *path);
+
 #endif // SOUI_SIM_HAL_H_

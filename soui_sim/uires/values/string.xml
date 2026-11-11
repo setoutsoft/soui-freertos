@@ -5,7 +5,9 @@
   <sub value="swinx platform layer + render-gdi (cairo) + imgdecoder-stb, presented through an SDL2 framebuffer."/>
   <btn_switch value="Switch image"/>
   <btn_anim value="Freeze anim"/>
-  <anim_label value="ValueAnimator on the SOUI timeline: sweep (SIntAnimator) + alpha (SByteAnimator)"/>
+  <anim_label value="ValueAnimator: sweep (SIntAnimator) + alpha (SByteAnimator)"/>
+  <!-- <edit> cue text: shown while the field is empty and unfocused -->
+  <edt_cue value="Edit here: typing / Backspace / arrows"/>
   <!-- combobox items: the value list of the speed selector, handled by
        CMainDlg::OnCbxSpeedChange() via EVT_CB_SELCHANGE -->
   <cbx_slow value="Slow: sweep 2000ms / fade 1600ms"/>

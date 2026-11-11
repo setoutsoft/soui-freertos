@@ -109,15 +109,14 @@ void CMainDlg::onAnimationUpdate(IValueAnimator *pAnimator)
 // combobox demo -- SComboBox with dropDown=1 (list only, no visible edit)
 //
 // The list is created lazily on the first drop-down and lives in its own swinx
-// window (SDropDownWnd); on this port that window paints straight into the same
-// framebuffer, so two things are the application's job:
+// window (SDropDownWnd).  Both windows blit into the same framebuffer, and the
+// platform composes them in creation order (bottom -> top): a repaint of this
+// window re-blits the popup on top of the region they share, and destroying the
+// popup recomposes the main window underneath it.  So the app has exactly one
+// job here:
 //
 //   EVT_CB_SELCHANGE   picks the row and maps it to the two animator durations;
 //                      the values are plain milliseconds, nothing polls.
-//   EVT_CB_BEFORE_CLOSEUP fires for *every* way the list can be dismissed, and
-//                      invalidates the main window.  Without it the pixels of
-//                      the closed popup stay on screen: there is no compositor
-//                      and no Windows-style WM_PAINT for the uncovered owner.
 // ---------------------------------------------------------------------------
 void CMainDlg::OnCbxSpeedChange(IEvtArgs *e)
 {
@@ -136,11 +135,6 @@ void CMainDlg::OnCbxSpeedChange(IEvtArgs *e)
         SetAnimSpeed(1200, 900);
         break;
     }
-}
-
-void CMainDlg::OnCbxBeforeCloseUp(IEvtArgs * /*e*/)
-{
-    GetRoot()->Invalidate();
 }
 
 void CMainDlg::SetAnimSpeed(int nSweepMs, int nFadeMs)

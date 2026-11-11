@@ -30,8 +30,7 @@ class CMainDlg : public SHostWnd
     void OnToggleAnim();  // btn_anim: freeze / resume the value animators
 
     // ---- combobox events (EVENT_MAP below) --------------------------------
-    void OnCbxSpeedChange(IEvtArgs *e);   // cbx_speed: EVT_CB_SELCHANGE
-    void OnCbxBeforeCloseUp(IEvtArgs *e); // cbx_speed: EVT_CB_BEFORE_CLOSEUP
+    void OnCbxSpeedChange(IEvtArgs *e); // cbx_speed: EVT_CB_SELCHANGE
 
     BOOL OnInitDialog(HWND wndFocus, LPARAM lInitParam);
 
@@ -43,7 +42,6 @@ class CMainDlg : public SHostWnd
         EVENT_ID_COMMAND(R.id.btn_test, OnSwitchImage)
         EVENT_ID_COMMAND(R.id.btn_anim, OnToggleAnim)
         EVENT_ID_HANDLER(R.id.cbx_speed, EventCBSelChange::EventID, OnCbxSpeedChange)
-        EVENT_ID_HANDLER(R.id.cbx_speed, EventCBBeforeCloseUp::EventID, OnCbxBeforeCloseUp)
     EVENT_MAP_END2(SHostWnd)
 
     // native window messages, chained to SHostWnd

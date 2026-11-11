@@ -34,16 +34,13 @@
       rounded field comes from the wrapper window's skin_field.
 
       The list itself lives in a *separate* swinx window (SDropDownWnd) that
-      blits into the same framebuffer; there is no compositor, so what the main
-      window paints while it is open stays painted over it.  Hence:
-        * focusable=0 -- taking focus would run the root focus animation
-          (focusAniSkin), which repaints a window-sized area and wipes the list;
-        * the list must not overlap anim_box / fade_box (they repaint every
-          16ms), so it opens downward over the static button row and the
-          description text, which is what 24px of free room below the field
-          buys us (CalcPopupRect: 130 + 64 <= 240 -> opens downward).
-      CMainDlg::OnCbxBeforeCloseUp() repaints the main window once the list is
-      dismissed, otherwise its pixels would stay in the framebuffer.
+      blits into the same framebuffer.  The platform keeps a z-order list
+      (creation order) and recomposes: what this window paints while the list is
+      open re-blits the list on top, and closing the list repaints the main
+      window underneath.  So the combo may hold focus like on Windows -- the
+      focus animation repainting the whole root no longer wipes the list.
+      Kept out of anim_box / fade_box's columns only so the demo reads clearly:
+      the list opens downward over the button row and the description text.
     -->
     <window name="cbx_field" pos="14,106,-14,130" skin="skin_field">
       <combobox name="cbx_speed" pos="0,0,-0,-0" dropDown="1" focusable="1" dropHeight="90" curSel="1"
@@ -65,10 +62,27 @@
     <button name="btn_test" class="normalbtn" pos="14,134,110,158" text="@string/btn_switch" animate="1" tip="PNG / SVG"/>
     <button name="btn_anim" class="normalbtn" pos="118,134,214,158" text="@string/btn_anim" animate="1" tip="freeze / resume"/>
 
-    <text class="cls_txt_sub" text="@string/anim_label" pos="14,162,-14,196"/>
+    <!--
+      Real <edit>: SEdit -> SRichEdit -> richedit41's CreateTextServices().
+      On a desktop build that symbol is dlopen()ed from the system Msftedit.dll;
+      this port links the vendored richedit41 in statically instead (see
+      SOUI_FR_USE_RICHEDIT in soui-freertos/cmake/SouiFreeRTOS.cmake), which is
+      what makes an editable control possible at all here.  Its whole point in
+      this demo is the keyboard path: WM_CHAR inserts, VK_BACK deletes, arrows
+      move the caret -- all of which require TranslateMessage() to hand out
+      proper characters instead of the raw VK.
+      The 1px frame + white fill come from the wrapper (SRichEdit draws only the
+      text), same trick as cbx_field above.
+    -->
+    <window name="edt_field" pos="14,162,-14,186" skin="skin_field">
+      <edit name="edt_input" pos="4,0,-6,-0" font="adding:-1" colorBkgnd="@color/thm_color"
+            cueText="@string/edt_cue" cueColor="@color/thm_txt_disabled"/>
+    </window>
+
+    <text class="cls_txt_sub" text="@string/anim_label" pos="14,188,-14,202"/>
 
     <!-- animation targets, driven by CMainDlg::onAnimationUpdate() -->
-    <window name="anim_box" pos="14,202,54,218" colorBkgnd="@color/orange"/>
-    <window name="fade_box" pos="14,222,54,238" colorBkgnd="@color/blue"/>
+    <window name="anim_box" pos="14,204,54,220" colorBkgnd="@color/orange"/>
+    <window name="fade_box" pos="14,224,54,240" colorBkgnd="@color/blue"/>
   </root>
 </SOUI>

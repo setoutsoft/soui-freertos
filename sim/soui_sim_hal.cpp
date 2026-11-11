@@ -43,6 +43,80 @@ static const unsigned int WM_KEYUP = 0x0101;
 static const unsigned long long MK_LBUTTON = 0x0001;
 static const unsigned long long MK_RBUTTON = 0x0002;
 
+// ---------------------------------------------------------------------------
+// SDL keysym -> Win32 virtual-key code
+//
+// SDL's `keysym.sym` is a *unicode-ish* code, not a VK: it only agrees with
+// Win32 for ASCII letters/digits, and everything else sits above
+// SDLK_SCANCODE_MASK (0x40000000).  The old code passed `sym & 0xFF`, so
+//   SDLK_UP   (0x40000052) -> 0x52 'R'
+//   SDLK_DOWN (0x40000051) -> 0x51 'Q'
+//   SDLK_LEFT (0x40000050) -> 0x50 'P'
+//   SDLK_DELETE(0x7F)      -> 0x7F (VK_DELETE is 0x2E)
+// and the app only ever saw letters: Tab worked (SDLK_TAB == VK_TAB == 9) while
+// the arrow keys turned into type-ahead characters, which is exactly the
+// "combobox does not react to up/down" symptom.
+//
+// Punctuation needs the same treatment for the opposite reason: SDLK_COMMA is
+// ',' (0x2C) but the WM_CHAR translator keys off VK_OEM_COMMA (0xBC); passing
+// the ASCII value would produce no character at all.
+// ---------------------------------------------------------------------------
+static unsigned int SdlSymToVk(SDL_Keycode sym)
+{
+    // letters: VK_A..VK_Z share the ASCII values, SDL reports them lowercased
+    if (sym >= SDLK_a && sym <= SDLK_z)
+        return (unsigned int)('A' + (sym - SDLK_a));
+    if (sym >= SDLK_0 && sym <= SDLK_9)
+        return (unsigned int)('0' + (sym - SDLK_0));
+    if (sym >= SDLK_F1 && sym <= SDLK_F12)
+        return (unsigned int)(0x70 + (sym - SDLK_F1)); // VK_F1..VK_F12
+
+    switch (sym)
+    {
+    case SDLK_RETURN:
+    case SDLK_KP_ENTER:   return 0x0D; // VK_RETURN
+    case SDLK_ESCAPE:     return 0x1B;
+    case SDLK_BACKSPACE:  return 0x08;
+    case SDLK_TAB:        return 0x09;
+    case SDLK_SPACE:      return 0x20;
+    case SDLK_DELETE:     return 0x2E;
+    case SDLK_INSERT:     return 0x2D;
+    case SDLK_HOME:       return 0x24;
+    case SDLK_END:        return 0x23;
+    case SDLK_PAGEUP:     return 0x21;
+    case SDLK_PAGEDOWN:   return 0x22;
+    case SDLK_UP:         return 0x26;
+    case SDLK_DOWN:       return 0x28;
+    case SDLK_LEFT:       return 0x25;
+    case SDLK_RIGHT:      return 0x27;
+    case SDLK_CAPSLOCK:   return 0x14; // VK_CAPITAL
+    case SDLK_NUMLOCKCLEAR: return 0x90;
+    case SDLK_SCROLLLOCK: return 0x91;
+    case SDLK_LSHIFT:
+    case SDLK_RSHIFT:     return 0x10; // VK_SHIFT (VK_LSHIFT/RSHIFT also work,
+                                       // but GetKeyState(VK_SHIFT) is what SOUI asks)
+    case SDLK_LCTRL:
+    case SDLK_RCTRL:      return 0x11;
+    case SDLK_LALT:
+    case SDLK_RALT:       return 0x12;
+    // punctuation -> the OEM VK the WM_CHAR translator knows
+    case SDLK_SEMICOLON:  return 0xBA; // VK_OEM_1      ;:
+    case SDLK_EQUALS:     return 0xBB; // VK_OEM_PLUS   =+
+    case SDLK_COMMA:      return 0xBC; // VK_OEM_COMMA  ,<
+    case SDLK_MINUS:      return 0xBD; // VK_OEM_MINUS  -_
+    case SDLK_PERIOD:     return 0xBE; // VK_OEM_PERIOD .>
+    case SDLK_SLASH:      return 0xBF; // VK_OEM_2      /?
+    case SDLK_BACKQUOTE:  return 0xC0; // VK_OEM_3      `~
+    case SDLK_LEFTBRACKET:  return 0xDB; // VK_OEM_4    [{
+    case SDLK_BACKSLASH:    return 0xDC; // VK_OEM_5    \|
+    case SDLK_RIGHTBRACKET: return 0xDD; // VK_OEM_6    ]}
+    case SDLK_QUOTE:        return 0xDE; // VK_OEM_7    '"
+    default:
+        break;
+    }
+    return 0; // not mapped: do not inject a bogus key
+}
+
 static SDL_Window *g_win = NULL;
 static SDL_Renderer *g_ren = NULL;
 static SDL_Texture *g_tex = NULL;
@@ -188,11 +262,18 @@ void SimHalPumpEvents(void)
             break;
         }
         case SDL_KEYDOWN:
-            SwinxInjectKey(g_targetHwnd, WM_KEYDOWN, ev.key.keysym.sym & 0xFF, 0);
-            break;
         case SDL_KEYUP:
-            SwinxInjectKey(g_targetHwnd, WM_KEYUP, ev.key.keysym.sym & 0xFF, 0);
+        {
+            // keysym.sym -> VK; the raw SDL value is NOT a VK (see SdlSymToVk)
+            unsigned int vk = SdlSymToVk(ev.key.keysym.sym);
+            if (vk)
+            {
+                SwinxInjectKey(g_targetHwnd,
+                               (ev.type == SDL_KEYDOWN) ? WM_KEYDOWN : WM_KEYUP,
+                               vk, (unsigned int)ev.key.keysym.scancode);
+            }
             break;
+        }
         default:
             break;
         }
@@ -209,4 +290,19 @@ int SimHalRenderIfDirty(void)
     SDL_RenderCopy(g_ren, g_tex, NULL, NULL);
     SDL_RenderPresent(g_ren);
     return 1;
+}
+/* Snapshot the swinx framebuffer to a .bmp.
+ * Lets a headless run (SDL_VIDEODRIVER=dummy + SOUI_SIM_TESTUI) leave
+ * inspectable pixels behind; the scripted scenarios in main.cpp call it
+ * at the ticks where something should have changed on screen. */
+int SimHalDumpNow(const char *path)
+{
+    SDL_Surface *pSurf = SDL_CreateRGBSurfaceWithFormatFrom(
+        SwinxFbBits(), g_fbW, g_fbH, 32, g_fbW * sizeof(uint32_t), SDL_PIXELFORMAT_ARGB8888);
+    if (!pSurf)
+        return -1;
+    int rc = SDL_SaveBMP(pSurf, path);
+    SDL_FreeSurface(pSurf);
+    printf("[sim] dump %s rc=%d\n", path, rc);
+    return rc;
 }

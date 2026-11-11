@@ -102,8 +102,110 @@ static int RunApp(void)
     int pumpTicks = 0;
     int closePostedAt = 0;       // 0 = not posted yet
     MSG msg;
+
+    // Dispatch through SOUI's message loop when there is one.  A raw
+    // TranslateMessage/DispatchMessage pump skips PreTranslateMessage, and that
+    // is where the framework's message *filters* live: SDropDownWnd_ComboBox
+    // uses one to forward VK_UP/VK_DOWN/VK_RETURN/VK_ESCAPE to the drop-down,
+    // which is a separate window that never takes OS focus.  Without it the
+    // open list cannot be navigated or confirmed from the keyboard at all
+    // (the owner window gets the keys and nothing re-routes them).
+    // IMessageLoop::OnMsg is exactly ExecutePendingTask + PreTranslateMessage +
+    // TranslateMessage + DispatchMessage, i.e. the body of SMessageLoop::Run()
+    // minus the blocking GetMessage that this pump replaces with PeekMessage.
+    IMessageLoop *pMsgLoop = app.GetMsgLoop();
+    printf("[sim] message loop for filters: %s\n", pMsgLoop ? "yes" : "no");
+
+    // Headless UI test driver.  SOUI_SIM_TESTUI=<n> scripts one scenario from
+    // the pump so keyboard/focus handling can be checked without a real event
+    // source (the dummy SDL driver produces no input at all):
+    //   1 = Tab to the combobox, then arrows change the selection
+    //   2 = open the drop-down, arrow down, Enter to confirm
+    //   3 = arrows only (is the combo already focused?)
+    //   4 = 3 x Tab to the combobox, then arrows with dumps in between
+    //   5 = click the <edit> and type "HELLO", Space, Backspace, Shift+A, B
+    // Every scheduled dump writes sim_k<mode>_t<tick>.bmp, so a headless run
+    // still yields pixels to inspect.  0 / unset disables all of it.
+    const int testMode = getenv("SOUI_SIM_TESTUI") ? atoi(getenv("SOUI_SIM_TESTUI")) : 0;
+
     while(IsWindow(hWnd)){
         ++pumpTicks;
+
+        if (testMode)
+        { // scripted input for the current mode
+            const int mode = testMode;
+            int px = -1, py = -1, dump = 0;
+            int key = 0;
+            if (mode == 1)
+            {
+                if (pumpTicks == 5) key = 0x09;        // VK_TAB -> focus combobox
+                else if (pumpTicks == 10) key = 0x28;  // VK_DOWN
+                else if (pumpTicks == 20) key = 0x26;  // VK_UP
+                else if (pumpTicks == 15 || pumpTicks == 25) dump = 1;
+            }
+            else if (mode == 2)
+            {
+                if (pumpTicks == 5) { px = 66; py = 118; }   // open the list
+                else if (pumpTicks == 15) key = 0x28;        // VK_DOWN -> list
+                else if (pumpTicks == 25) dump = 1;
+                else if (pumpTicks == 30) key = 0x0D;        // VK_RETURN -> pick
+                else if (pumpTicks == 45) dump = 1;
+            }
+            else if (mode == 5) // type into the <edit>
+            {
+                switch (pumpTicks)
+                {
+                case 5: { px = 80; py = 174; break; }
+                case 10: SwinxInjectKey(hWnd, WM_KEYDOWN, 'H', 0); SwinxInjectKey(hWnd, WM_KEYUP, 'H', 0); break;
+                case 11: SwinxInjectKey(hWnd, WM_KEYDOWN, 'E', 0); SwinxInjectKey(hWnd, WM_KEYUP, 'E', 0); break;
+                case 12: SwinxInjectKey(hWnd, WM_KEYDOWN, 'L', 0); SwinxInjectKey(hWnd, WM_KEYUP, 'L', 0); break;
+                case 13: SwinxInjectKey(hWnd, WM_KEYDOWN, 'L', 0); SwinxInjectKey(hWnd, WM_KEYUP, 'L', 0); break;
+                case 14: SwinxInjectKey(hWnd, WM_KEYDOWN, 'O', 0); SwinxInjectKey(hWnd, WM_KEYUP, 'O', 0); break;
+                case 16: SwinxInjectKey(hWnd, WM_KEYDOWN, 0x20, 0); SwinxInjectKey(hWnd, WM_KEYUP, 0x20, 0); break;
+                case 18: SwinxInjectKey(hWnd, WM_KEYDOWN, 0x08, 0); SwinxInjectKey(hWnd, WM_KEYUP, 0x08, 0); break;
+                case 20: SwinxInjectKey(hWnd, WM_KEYDOWN, 0x10, 0); break;
+                case 21: SwinxInjectKey(hWnd, WM_KEYDOWN, 'A', 0); SwinxInjectKey(hWnd, WM_KEYUP, 'A', 0); break;
+                case 22: SwinxInjectKey(hWnd, WM_KEYUP, 0x10, 0); break;
+                case 24: SwinxInjectKey(hWnd, WM_KEYDOWN, 'B', 0); SwinxInjectKey(hWnd, WM_KEYUP, 'B', 0); break;
+                case 26: dump = 1; break;
+                default: break;
+                }
+            }
+            else if (mode == 4) // walk the tab order, then poke arrows
+            {
+                if (pumpTicks == 5 || pumpTicks == 10 || pumpTicks == 15) key = 0x09; // -> cbx_speed
+                else if (pumpTicks == 25) key = 0x28;
+                else if (pumpTicks == 30) dump = 1;
+                else if (pumpTicks == 35) key = 0x26;
+                else if (pumpTicks == 40) dump = 1;
+            }
+            else if (mode == 3) // no Tab first: is the combo already focused?
+            {
+                if (pumpTicks == 5) key = 0x28;      // VK_DOWN
+                else if (pumpTicks == 8) dump = 1;
+                else if (pumpTicks == 12) key = 0x26; // VK_UP
+                else if (pumpTicks == 15) dump = 1;
+            }
+            if (key)
+            {
+                SwinxInjectKey(hWnd, WM_KEYDOWN, key, 0);
+                SwinxInjectKey(hWnd, WM_KEYUP, key, 0);
+                printf("[test] key 0x%02X at tick %d\n", key, pumpTicks);
+            }
+            if (px >= 0)
+            {
+                SwinxInjectMouse(hWnd, WM_MOUSEMOVE, px, py, 0);
+                SwinxInjectMouse(hWnd, WM_LBUTTONDOWN, px, py, MK_LBUTTON);
+                SwinxInjectMouse(hWnd, WM_LBUTTONUP, px, py, 0);
+                printf("[test] click %d,%d at tick %d\n", px, py, pumpTicks);
+            }
+            if (dump)
+            {
+                char name[40];
+                sprintf(name, "sim_k%d_t%d.bmp", mode, pumpTicks);
+                SimHalDumpNow(name);
+            }
+        }
         if (pumpTicks == 1)
             printf("[sim] message pump started\n");
         SimHalPumpEvents();    // SDL events -> swinx input
@@ -111,8 +213,18 @@ static int RunApp(void)
 
         while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
         {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
+            if (testMode && (msg.message == WM_KEYDOWN || msg.message == WM_CHAR))
+                printf("[test] queued msg=0x%04X wParam=0x%02X hwnd=%p focus=%p\n",
+                       (unsigned)msg.message, (unsigned)msg.wParam, (void*)msg.hwnd, (void*)::GetFocus());
+            if (pMsgLoop)
+            {
+                pMsgLoop->OnMsg(&msg);
+            }
+            else
+            {
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
         }
         if (autoExitTicks && !closePostedAt && pumpTicks >= autoExitTicks)
         {

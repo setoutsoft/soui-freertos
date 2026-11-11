@@ -115,6 +115,20 @@ endif()
 
 option(SOUI_FR_WARNINGS "Keep compiler warnings for SOUI/swinx/third-party sources" OFF)
 
+# Compile the vendored richedit41 into the library so <edit> works.  A desktop
+# SOUI build dlopen()s the system Msftedit.dll instead; there is no dlopen on
+# bare metal and no system richedit on either target, so the text engine has to
+# be linked in.  Host builds only: richedit41 needs the Win32 shim at full
+# strength, which the bare-metal QEMU probe deliberately does not carry yet.
+if(NOT SOUI_FR_BARE_METAL)
+    set(_soui_fr_richedit_default ON)
+else()
+    set(_soui_fr_richedit_default OFF)
+endif()
+option(SOUI_FR_USE_RICHEDIT
+       "Compile richedit41 in so SRichEdit/<edit> works" ${_soui_fr_richedit_default})
+unset(_soui_fr_richedit_default)
+
 # System packages: only for host builds, and only when pkg-config can prove
 # each of them exists.  The result is stored as a REAL cache entry: the old
 # "option() over a normal variable of the same name" trick does not create one
@@ -543,6 +557,118 @@ function(soui_fr_add_soui)
     target_compile_definitions(imgdecoder_stb_fr PRIVATE
         SOUI_IMAGE_DECODER_USE_STB
         SOUI_IMAGE_DECODER_USE_STB_STATIC)
+
+    # ---- richedit41: the text engine behind <edit> / SRichEdit ------------
+    # SRichEdit::OnCreate() creates its text service through CreateTextServices().
+    # A desktop SOUI build dlopen()s that symbol out of the system Msftedit.dll;
+    # this port has no dlopen and no system richedit, so the vendored richedit41
+    # is compiled in and SRichEdit takes its INIT_RICHEDIT branch.  Without it
+    # every <edit> fails to create ("init ITextHost Failed!").
+    #
+    # richedit41 ships its own CMakeLists, but that file assumes a real MSVC/
+    # Windows-SDK build on Windows (Usp10.lib, /DEF:msftedit.def, msftedit.rc)
+    # and a POSIX one everywhere else.  Neither matches "MinGW host running the
+    # swinx Win32 shim", so the source list and the defines are repeated here --
+    # the same set re41/CMakeLists.txt uses, minus the files it comments out.
+    if(SOUI_FR_USE_RICHEDIT)
+        if(NOT TARGET msftedit_fr)
+            set(_re_root "${ROOT}/third-part/richedit41")
+            set(_re_gen "${CMAKE_BINARY_DIR}/third_part/richedit41")
+            add_subdirectory("${_re_root}/lssrc" "${_re_gen}/lssrc")
+
+            file(GLOB _re_srcs "${_re_root}/re41/*.cpp")
+            # lbhost/cbhost/w32win32/cuim: the same files re41/CMakeLists.txt
+            # comments out (Win32 OLE-object and UI-manager halves).
+            foreach(_re_skip lbhost cbhost w32win32 cuim)
+                list(REMOVE_ITEM _re_srcs "${_re_root}/re41/${_re_skip}.cpp")
+            endforeach()
+            add_library(msftedit_fr STATIC ${_re_srcs})
+
+            # Same recipe as the wasm build: re41/CMakeLists.txt does
+            # target_link_libraries(msftedit swinx msls31) for every non-Windows
+            # platform, and that one line is what hands the text engine the
+            # shim's headers.  It is not optional: the HDC/HFONT/... richedit
+            # receives are swinx objects and the framework's Win32 entry points
+            # are the shim's C symbols, while a TU compiled against the host SDK
+            # sees WINGDIAPI as __declspec(dllimport) and goes through __imp_*
+            # to the real gdi32.  That is what made CDevDesc::SetDC measure
+            # GetDeviceCaps(hdc, LOGPIXELSX) on a swinx DC as 0, fail
+            # CDisplay::Draw and leave TxDraw at E_FAIL (nothing painted).
+            target_link_libraries(msftedit_fr PRIVATE swinx_core)
+
+            # reinit.cpp does #include <config.h> for the toggles the original
+            # MS build generated; the vendored tree ships none, so provide an
+            # empty one (every feature here is driven by the -D flags below).
+            file(WRITE "${_re_gen}/config.h"
+                 "/* generated for the soui-freertos build: see SouiFreeRTOS.cmake */\n")
+
+            # Include order is copied from the wasm build: there swinx/include
+            # is a global include_directories() entry, so it is emitted before
+            # the richedit ones (see the INCLUDES of antievt.cpp.o in
+            # demos/wasm-demo/build/build.ninja).  That detail is what makes
+            # _common.h's "imm.h" resolve to swinx/include/imm.h -- with inc41
+            # first it would pick the SDK-flavoured inc41/imm.h (DECLARE_HANDLE,
+            # HIMC, ...) and the TU would end up with two type systems.
+            target_include_directories(msftedit_fr BEFORE PRIVATE
+                "${SOUI_FR_SWINX_DIR}/include"
+                "${_re_gen}"
+                "${_re_root}/tom41" "${_re_root}/lsinc" "${_re_root}/inc41"
+                "${_re_root}/re41")
+
+            # The -D list is copied verbatim from re41/CMakeLists.txt so the
+            # engine's feature surface matches wasm -- UNICODE but *not*
+            # _UNICODE: re41's _common.h defines _UNICODE itself (line 29) and
+            # swinx's <tchar.h> keys LPCTSTR off that macro, so the two agree as
+            # long as _common.h is read first.  Which is also why nothing on
+            # this command line may pull in <windows.h>: it includes <tchar.h>,
+            # latching LPCTSTR to the narrow form before _common.h runs.
+            target_compile_definitions(msftedit_fr PRIVATE
+                _CRT_SECURE_NO_WARNINGS UNICODE NODELAYLOAD
+                NOCOMPLEXSCRIPTS NOPRIVATEMESSAGE NOANSIWINDOWS NOVERSIONINFO
+                NOLISTCOMBOBOXES NOMETAFILES NOACCESSIBILITY NOINKOBJECT)
+
+            set(_re_flags -w -fpermissive -Wno-invalid-offsetof) # -w: vendored code
+            if(MINGW)
+                # ------------------------------------------------------------------
+                # _WIN32 is the one thing a MinGW host cannot share with the
+                # other platforms.  Linux/macOS/Android/iOS/wasm all compile this
+                # code with _WIN32 undefined, so every "#ifdef _WIN32" block in
+                # re41 (reinit.cpp, w32win32.cpp, _version.h, tom.h, the MIDL
+                # headers) takes its portable #else half -- the halves that
+                # return 0/NULL/FALSE and never touch COM.  A MinGW host always
+                # defines _WIN32, and with it those blocks want ~200 symbols
+                # swinx deliberately does not model (OleSave/OleDraw/
+                # OleCreateFromData/..., the EMR_* metafile records, the palette
+                # API, LoadTypeLib, ...) plus the MSVC-only "##" string paste in
+                # _version.h that g++ rejects.
+                #
+                # So the target is built the way the other platforms build it:
+                # -U_WIN32.  MinGW's own CRT headers refuse to load without the
+                # macro, and that is the only thing msftedit_win32_host.h is
+                # for: it defines _WIN32 for those headers and drops it again.
+                # Nothing else changes, and the file is not used by any other
+                # toolchain.
+                #
+                # The "-include" flag MUST stay glued to the file name (single
+                # token "-include<file>"): CMake de-duplicates compile options,
+                # and a standalone "-include" here would swallow the platform
+                # target's INTERFACE "-include", leaving a bare
+                # "soui_fr_compat.h" on the command line -- g++ then rejects the
+                # line with "cannot specify '-o' with '-c' ... with multiple
+                # files".
+                #
+                # -fpermissive: richedit41 truncates HKL to a WORD in
+                # cmsgflt.cpp.
+                # ------------------------------------------------------------------
+                list(APPEND _re_flags
+                     "-include${SOUI_FR_CMAKE_DIR}/msftedit_win32_host.h"
+                     -U_WIN32)
+            endif()
+            target_compile_options(msftedit_fr PRIVATE ${_re_flags})
+        endif()
+        target_compile_definitions(soui4_fr PRIVATE INIT_RICHEDIT)
+        target_link_libraries(soui4_fr PUBLIC msftedit_fr msls31 usp10 imm32)
+    endif()
 
     add_library(soui_fr_soui INTERFACE)
     add_library(soui_fr::soui ALIAS soui_fr_soui)
