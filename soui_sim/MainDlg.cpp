@@ -106,6 +106,52 @@ void CMainDlg::onAnimationUpdate(IValueAnimator *pAnimator)
 }
 
 // ---------------------------------------------------------------------------
+// combobox demo -- SComboBox with dropDown=1 (list only, no visible edit)
+//
+// The list is created lazily on the first drop-down and lives in its own swinx
+// window (SDropDownWnd); on this port that window paints straight into the same
+// framebuffer, so two things are the application's job:
+//
+//   EVT_CB_SELCHANGE   picks the row and maps it to the two animator durations;
+//                      the values are plain milliseconds, nothing polls.
+//   EVT_CB_BEFORE_CLOSEUP fires for *every* way the list can be dismissed, and
+//                      invalidates the main window.  Without it the pixels of
+//                      the closed popup stay on screen: there is no compositor
+//                      and no Windows-style WM_PAINT for the uncovered owner.
+// ---------------------------------------------------------------------------
+void CMainDlg::OnCbxSpeedChange(IEvtArgs *e)
+{
+    EventCBSelChange *evt = sobj_cast<EventCBSelChange>(e);
+    if (!evt)
+        return;
+    switch (evt->nCurSel)
+    {
+    case 0:
+        SetAnimSpeed(2000, 1600);
+        break;
+    case 2:
+        SetAnimSpeed(500, 350);
+        break;
+    default:
+        SetAnimSpeed(1200, 900);
+        break;
+    }
+}
+
+void CMainDlg::OnCbxBeforeCloseUp(IEvtArgs * /*e*/)
+{
+    GetRoot()->Invalidate();
+}
+
+void CMainDlg::SetAnimSpeed(int nSweepMs, int nFadeMs)
+{
+    if (m_moveAni)
+        m_moveAni->setDuration(nSweepMs);
+    if (m_fadeAni)
+        m_fadeAni->setDuration(nFadeMs);
+}
+
+// ---------------------------------------------------------------------------
 // commands
 // ---------------------------------------------------------------------------
 void CMainDlg::OnClose()

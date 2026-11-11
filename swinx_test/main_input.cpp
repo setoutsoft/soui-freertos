@@ -158,7 +158,55 @@ static void input_key_test(void)
 }
 
 // ---------------------------------------------------------------------------
-// 3) cross-task injection: a FreeRTOS injector task posts into the UI task's
+// 3) capture routing: while a window holds capture (the drop-down list of a
+//    combobox does SetCapture), injected mouse messages aimed at another window
+//    must be re-routed to the capture window and converted to ITS client
+//    coordinates.  Without this a drop-down can be opened but never clicked:
+//    SComboBox's list lives in a separate top-level window.
+// ---------------------------------------------------------------------------
+static HWND s_hInpCapWnd = NULL;
+
+static void input_capture_test(void)
+{
+    // different screen origin from s_hInpWnd (10,20) so the client conversion
+    // can only be right if it uses the *capture* window, not the injection arg
+    s_hInpCapWnd = CreateWindowExA(0, "inpw", "cap", WS_VISIBLE,
+                                   60, 5, 80, 60, NULL, NULL, NULL, NULL);
+    CHECK(s_hInpCapWnd != NULL);
+    pump();
+
+    // prime the hover/NC state (see the comment in input_mouse_test)
+    SwinxInjectMouse(s_hInpCapWnd, WM_MOUSEMOVE, 70, 15, 0);
+    pump();
+
+    SConnection *conn = SConnMgr::instance()->getConnection();
+    // screen (70,15) is (10,10) inside the capture window and (60,-5) in s_hInpWnd
+    SetCapture(s_hInpCapWnd);
+    CHECK(conn->GetCapture() == s_hInpCapWnd);
+
+    s_nRec = 0;
+    SwinxInjectMouse(s_hInpWnd, WM_LBUTTONDOWN, 70, 15, MK_LBUTTON);
+    pump();
+    CHECK(s_nRec == 1);
+    CHECK(s_rec[0].msg == WM_LBUTTONDOWN);
+    CHECK(s_rec[0].x == 10 && s_rec[0].y == 10);
+
+    // after the capture is released the injection argument wins again
+    ReleaseCapture();
+    CHECK(conn->GetCapture() == NULL);
+
+    s_nRec = 0;
+    SwinxInjectMouse(s_hInpWnd, WM_LBUTTONUP, 40, 50, 0);
+    pump();
+    CHECK(s_nRec == 1);
+    CHECK(s_rec[0].msg == WM_LBUTTONUP);
+    CHECK(s_rec[0].x == 30 && s_rec[0].y == 30);
+
+    tprint("[inp] capture routing OK\n");
+}
+
+// ---------------------------------------------------------------------------
+// 4) cross-task injection: a FreeRTOS injector task posts into the UI task's
 //    queue and wakes it out of a blocked WaitMessage()
 // ---------------------------------------------------------------------------
 static HWND s_hInpWnd2 = NULL;
@@ -210,5 +258,6 @@ void run_input_tests(void)
     tprint("== input injection ==\n");
     input_mouse_test();
     input_key_test();
+    input_capture_test();
     input_cross_task_test();
 }

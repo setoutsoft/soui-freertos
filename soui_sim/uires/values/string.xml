@@ -6,4 +6,9 @@
   <btn_switch value="Switch image"/>
   <btn_anim value="Freeze anim"/>
   <anim_label value="ValueAnimator on the SOUI timeline: sweep (SIntAnimator) + alpha (SByteAnimator)"/>
+  <!-- combobox items: the value list of the speed selector, handled by
+       CMainDlg::OnCbxSpeedChange() via EVT_CB_SELCHANGE -->
+  <cbx_slow value="Slow: sweep 2000ms / fade 1600ms"/>
+  <cbx_normal value="Normal: sweep 1200ms / fade 900ms"/>
+  <cbx_fast value="Fast: sweep 500ms / fade 350ms"/>
 </string>

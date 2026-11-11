@@ -29,6 +29,10 @@ class CMainDlg : public SHostWnd
     void OnSwitchImage(); // btn_test: toggle PNG <-> SVG in img_view
     void OnToggleAnim();  // btn_anim: freeze / resume the value animators
 
+    // ---- combobox events (EVENT_MAP below) --------------------------------
+    void OnCbxSpeedChange(IEvtArgs *e);   // cbx_speed: EVT_CB_SELCHANGE
+    void OnCbxBeforeCloseUp(IEvtArgs *e); // cbx_speed: EVT_CB_BEFORE_CLOSEUP
+
     BOOL OnInitDialog(HWND wndFocus, LPARAM lInitParam);
 
   protected:
@@ -38,6 +42,8 @@ class CMainDlg : public SHostWnd
         EVENT_NAME_COMMAND(L"btn_min", OnMinimize)
         EVENT_ID_COMMAND(R.id.btn_test, OnSwitchImage)
         EVENT_ID_COMMAND(R.id.btn_anim, OnToggleAnim)
+        EVENT_ID_HANDLER(R.id.cbx_speed, EventCBSelChange::EventID, OnCbxSpeedChange)
+        EVENT_ID_HANDLER(R.id.cbx_speed, EventCBBeforeCloseUp::EventID, OnCbxBeforeCloseUp)
     EVENT_MAP_END2(SHostWnd)
 
     // native window messages, chained to SHostWnd
@@ -56,6 +62,7 @@ class CMainDlg : public SHostWnd
     void LoadImages();
     void ApplyImage();
     void StartAnimation();
+    void SetAnimSpeed(int nSweepMs, int nFadeMs);
 
     SAutoRefPtr<IBitmapS> m_png; // PNG:TEST_PNG, decoded by imgdecoder-stb
     SAutoRefPtr<ISvgObj> m_svg;  // SVG:TEST_SVG, parsed by the built-in nanosvg
