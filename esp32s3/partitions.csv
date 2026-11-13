@@ -1,0 +1,9 @@
+# ESP32-S3 16MB flash -- SOUI4/cairo factory image
+# 0x9000..0xF000 NVS / PHY; factory app at the standard 0x10000.
+# 6MB (not 4MB) because richedit41 + msls31 pushed the image past 0x3cb750 --
+# 4MB left only 5% headroom, which is not enough for a rebuild with a font.
+# 0x610000..0x1000000 stays free for a later spiffs/resource partition.
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x6000,
+phy_init,   data, phy,     0xf000,   0x1000,
+factory,    app,  factory, 0x10000,  0x600000,

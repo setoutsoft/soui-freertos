@@ -1,0 +1,11 @@
+# 仓库全局是 core.autocrlf=true，checkout 时会把文本换成 CRLF。
+# shell / python 脚本不能这样：
+#   idf_env.sh 的 shebang 变成 "#!/usr/bin/env bash\r" 后，
+#   执行会报 "bash: ./tools/idf_env.sh: No such file or directory"
+#   （解释器名带了个 \r），排查起来极费时间。
+*.sh     text eol=lf
+*.py     text eol=lf
+
+# 分区表必须无 BOM 且保持原样（README 第 2 节），交给 git 转换反而危险。
+partitions.csv  -text
+sdkconfig       -text

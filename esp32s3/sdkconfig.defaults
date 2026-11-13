@@ -1,0 +1,70 @@
+# =============================================================================
+# sdkconfig.defaults -- SOUI4 on ESP32-S3 (ES3C28P / ES3N28P)
+# Values cross-checked against the vendor LVGL demo's sdkconfig (ESP-IDF
+# v5.4.1 project in 1-示例程序_Demo/ESP-IDF/2.8inch_ESP32-S3_LVGL).
+# =============================================================================
+
+# ---- chip / flash -----------------------------------------------------------
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESP32S3_REV_MIN_0=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+# QIO, not the IDF default DIO: the module's flash is quad-capable and code is
+# XIP'd straight out of it, so DIO halves the instruction fetch bandwidth that
+# cairo/pixman's rasteriser lives on.
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# Data cache 64KB (the ESP32-S3 maximum) instead of the default 32KB.  Every
+# frame streams ARGB32 pixels through cairo into PSRAM; doubling the cache cuts
+# the miss rate on the sequential scan that dominates a software fill.
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+# 4MB factory app: the ARM census ELF was ~2.4MB text; cairo+PSRAM+Xtensa
+# code density puts the estimate at 3-4MB, so the stock 1MB single-app
+# partition is not enough.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# ---- 8MB Octal PSRAM --------------------------------------------------------
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+# cairo's large malloc()s (>=16KB) go to PSRAM automatically, which is where
+# the per-window ARGB32 surfaces must live (320x240x4 == 300KB each).
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
+CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y
+
+# ---- FreeRTOS ---------------------------------------------------------------
+# swinx/src/platform/freertos/winobjs.cpp: ms_to_ticks() is a 1:1 identity,
+# so configTICK_RATE_HZ MUST be 1000 or every WaitForSingleObject()/SetTimer()
+# timeout is off by 10x.  Also keeps SOUI's 10ms repeat timers accurate.
+CONFIG_FREERTOS_HZ=1000
+
+# ---- compiler / runtime -----------------------------------------------------
+# SOUI is built with -fexceptions in soui_fr/CMakeLists.txt and
+# SouiFreeRTOS.cmake; IDF defaults to -fno-exceptions.
+CONFIG_COMPILER_CXX_EXCEPTIONS=y
+# -O2, not the IDF default -Os.  Everything that matters here is software
+# rasterisation (cairo + pixman + nanosvg) and SOUI's paint walk, where -Os
+# costs 1.5-2x.  This is a 6MB app partition; the few hundred KB of code the
+# optimiser trades away are free, the per-frame milliseconds are not.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+# 240MHz instead of the 160MHz default.  The vendor LVGL demo stays at 160MHz,
+# but LVGL only touches its own small draw buffer while this port pulls a full
+# ARGB32 canvas through cairo; +50% clock is a straight +50% frame rate.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
+# app_main() itself is thin, but keep headroom for the C++ static constructors
+# IDF runs on this core before it creates the UI task.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# ---- console ----------------------------------------------------------------
+# Same as the vendor demo: primary UART0 + secondary native USB-Serial/JTAG,
+# so the boot log is visible on the COM4 esptool port.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+
+# ---- trim -------------------------------------------------------------------
+CONFIG_BT_ENABLED=n

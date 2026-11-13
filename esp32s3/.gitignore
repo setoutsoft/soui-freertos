@@ -1,0 +1,21 @@
+# ---- ESP-IDF 构建目录（588 MB，全部可重新生成）----
+build/
+build*/
+gen/
+
+# ---- 构建日志 / 串口抓取 ----
+b.out
+b.err
+b40.out
+b40.err
+*.log
+cap*.txt
+
+# ---- 二进制产物 ----
+*.bin
+*.elf
+*.map
+*.zip
+
+# ---- IDF 本地配置备份 ----
+sdkconfig.old
