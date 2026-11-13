@@ -81,8 +81,29 @@
 
     <text class="cls_txt_sub" text="@string/anim_label" pos="14,188,-14,202"/>
 
-    <!-- animation targets, driven by CMainDlg::onAnimationUpdate() -->
+    <!--
+      Animation targets, driven by CMainDlg::onAnimationUpdate().
+
+      anim_box  -- swept 14..260 px by a SIntAnimator (m_moveAni).  Position
+                   driven, so it repaints its old + new rect and nothing else.
+      fade_box  -- a *layered* window whose alpha is driven by a SByteAnimator
+                   (m_fadeAni).  Layered means SOUI composites it through an
+                   offscreen surface and AlphaBlends the whole rect every frame,
+                   so it is the most expensive window in this demo.  It is kept
+                   on purpose: it is exactly the cost class a real app hits with
+                   any translucent overlay, and it is the honest counterweight
+                   to a pure position animation.
+    -->
     <window name="anim_box" pos="14,204,54,220" colorBkgnd="@color/orange"/>
     <window name="fade_box" pos="14,224,54,240" colorBkgnd="@color/blue"/>
+
+    <!--
+      Live frame-rate readout, updated by CMainDlg's 500ms timer from
+      soui_board_frame_count(), i.e. finished WM_PAINTs per second -- the same
+      quantity the vendor LVGL build calls "fps".
+      Sits in the dead space right of fade_box (x 196..306, y 222..240) so
+      neither anim_box's sweep row nor fade_box's column covers it.
+    -->
+    <text name="fps_label" class="cls_txt_sub" pos="196,222,306,240" text="-- fps"/>
   </root>
 </SOUI>
