@@ -1,0 +1,22 @@
+// main.rc -- resource script for the ESP32-S3 firmware.
+//
+// Same shape as soui_sim/main.rc: windres compiles this into ONE PE-COFF
+// object carrying both resource sets,
+//
+//   soui_res.rc2        application resources, generated from uires/uires.idx
+//   theme_sys_res.rc2   SOUI system resources (skins / msgbox / editmenu / theme)
+//
+// and that object is then embedded into the image as data (see the windres ->
+// .incbin pipeline in main/CMakeLists.txt).  At runtime swinx's
+// WindResResourceParser locates the blob through the weak linker symbols
+// _binary_soui_coff_o_start/_end and serves FindResource/LoadResource, so the
+// app takes the same SResProviderPE path a Windows build does.  Nothing is
+// generated into a C array and nothing is loaded from disk.
+//
+// windres resolves the paths below relative to its working directory (this
+// directory) and searches --include-dir for the rest:
+//
+//   uires/...            -> <project>/uires            (cwd)
+//   theme_sys_res/...    -> <soui4>/soui-sys-resource-light  (--include-dir)
+#include "soui_res.rc2"         // app resources      (--include-dir <project>/soui_res)
+#include "theme_sys_res.rc2"    // system resources   (--include-dir soui-sys-resource-light)

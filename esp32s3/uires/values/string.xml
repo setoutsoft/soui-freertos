@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<string>
+  <title value="SOUI5 on FreeRTOS"/>
+  <hello value="SOUI5 running on FreeRTOS"/>
+  <sub value="swinx platform layer + render-gdi (cairo) + imgdecoder-stb, presented through an SDL2 framebuffer."/>
+  <btn_switch value="Switch image"/>
+  <btn_anim value="Freeze anim"/>
+  <anim_label value="ValueAnimator: sweep (SIntAnimator) + alpha (SByteAnimator)"/>
+  <!-- <edit> cue text: shown while the field is empty and unfocused -->
+  <edt_cue value="Edit here: typing / Backspace / arrows"/>
+  <!-- combobox items: the value list of the speed selector, handled by
+       CMainDlg::OnCbxSpeedChange() via EVT_CB_SELCHANGE -->
+  <cbx_slow value="Slow: sweep 2000ms / fade 1600ms"/>
+  <cbx_normal value="Normal: sweep 1200ms / fade 900ms"/>
+  <cbx_fast value="Fast: sweep 500ms / fade 350ms"/>
+</string>

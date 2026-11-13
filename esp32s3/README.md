@@ -9,9 +9,10 @@ XML 布局、图片、值动画全部走 SOUI 自己的路径，没有任何 LVG
 
 | 指标 | 实测 |
 |---|---|
-| 固件 | `soui_esp32s3.bin` = 4,495,680 字节（6MB app 分区剩 29%） |
-| 启动到首帧上屏 | 约 2.6 s（布局解析 + SVG 皮肤 + cairo 首帧 + 整屏 SPI） |
-| 稳态刷新 | **21~23 fps**（`paint` 39~46 ms + `flush` <1.5 ms；两个动画：扫动 + alpha） |
+| 固件 | `soui_esp32s3.bin` = 4,537,248 字节（6MB app 分区剩 28%） |
+| 启动到首帧上屏 | 约 4.4 s（上电 → COFF 资源解析 → 布局 + SVG 皮肤 → cairo 首帧 + 整屏 SPI；其中 UI 任务内部约 3.0 s） |
+| 稳态刷新 | **20~22 fps**（`paint` 42~45 ms + `flush` <1.5 ms；两个动画：扫动 + alpha） |
+| 资源 | windres COFF 81,298 B / 56 条（app uires 9 + 系统主题 47），`SResProviderPE` 加载 |
 | 稳定性 | 连续运行无 panic、无 task_wdt |
 
 > 只想跑一遍"编译 → 烧录 → 看日志"的话，看 **[BUILD_FLASH.md](BUILD_FLASH.md)**，
@@ -38,7 +39,11 @@ XML 布局、图片、值动画全部走 SOUI 自己的路径，没有任何 LVG
 esp32s3/
 ├── CMakeLists.txt              顶层；把 IDF 工程挂到已装好的 IDF 上
 ├── sdkconfig.defaults          PSRAM / 16MB flash / C++ 异常 / 主任务栈
-├── partitions.csv              无 BOM！4MB factory + NVS + phy
+├── partitions.csv              无 BOM！6MB factory + NVS + phy
+├── uires/                     原始应用资源（XML / PNG / SVG）——改界面就改这里
+├── soui_res/                  uiresbuilder 产物：soui_res.rc2 + resource.h（入库）
+├── main.rc                    把 app 与系统两个 rc2 合成一个资源脚本
+├── cmake/soui_res.cmake       资源管线：uiresbuilder → windres → .incbin
 ├── components/
 │   ├── soui_cairo/             cairo + pixman + libpng + zlib（纯 C）
 │   └── soui/                   swinx(FreeRTOS 平台层) + SOUI + utilities
@@ -46,18 +51,18 @@ esp32s3/
 │       ├── include/soui_idf_compat.h   force-include 的 <climits> 等补丁
 │       └── framebuffer_idf.cpp         ARGB32 framebuffer 放 PSRAM
 ├── main/
-│   ├── app_main.cpp            UI 任务 + 资源装配 + 消息泵
+│   ├── app_main.cpp            UI 任务 + SResProviderPE 资源装配 + 消息泵
 │   ├── soui_demo.h/.cpp        soui_sim 的 CMainDlg（combobox/按钮/动画）
-│   ├── soui_resource.h         布局 id + 控件 id（原 uiresbuilder 的 R.id）
-│   ├── soui_res_table.h        (type,name) -> blob 表接口
-│   ├── generated/uires_res.cpp 生成物：56 条资源（app uires + 系统资源）
-│   ├── mem_res_provider.cpp    内存 IResProvider（含 PNG/SVG 解码）
 │   ├── soui_board.h/.cpp       RGB565 转换 + present 回调 + 触摸注入
 │   └── soui_board_esp32.cpp    ILI9341V / FT6X36 驱动（强实现）
 └── tools/
-    ├── gen_uires.py            资源目录 -> C++ 表（改了 uires 就重跑）
+    ├── idf_env.sh              手工装配 IDF 环境（绕开 export.sh 的 MSys 检查）
     └── serial_capture.py       复位 + 抓 N 秒串口日志（非交互）
 ```
+
+**资源不是 C 数组**：`uires/` 下的原始文件由 `uiresbuilder` 生成 `.rc2`，
+`windres` 编成一个 PE-COFF，再 `.incbin` 进 `.rodata.embedded`；运行时走
+SOUI 桌面版同一条 `SResProviderPE` / `FindResource` 路径（见第 4.1 节）。
 
 上游改动只有 4 处，其余全是新增文件：
 
@@ -151,16 +156,68 @@ $ echo $?
    （cairo + pixman + richedit41）全量编译在本机 `-j2` 要 15~20 分钟，中途
    别以为是挂死。
 
-改了 `main/generated/uires_res.cpp` 对应的资源（`soui_sim/uires` 或
-`soui_sys_res/theme_sys_res`）后重新生成：
+### 4.1 资源管线：改 XML / PNG / SVG 只要重新编译
 
-```bash
-# --strip-window-cache 不是可选项：不加的话布局根窗口的 cache="1" 会让每帧
-# 整窗重绘 + 整幅 AlphaBlend（见第 7 节坑 16、第 9 节）。
-python tools/gen_uires.py --app-uires /d/work/soui4/soui-freertos/soui_sim/uires \
-    --sys-res /d/work/soui4/demos/android-demo/app/src/main/assets/soui_sys_res/theme_sys_res \
-    --out main/generated/uires_res.cpp --strip-window-cache
+早期版本用 `tools/gen_uires.py` 把资源转成一个 30 万行的 C++ 字符串字面量表
+（`main/generated/uires_res.cpp`），改一个字符串要重跑脚本，控件 id 还得另外
+手写一份 `soui_resource.h` 同步枚举。现在改成和 `soui_sim` / 桌面版同一条路，
+**编辑原始资源文件后直接 `ninja` 即可**：
+
+```mermaid
+flowchart LR
+  A["uires/ 下的 XML·PNG·SVG<br/>soui-sys-resource-light/theme_sys_res/*"] --> B
+  B["uiresbuilder + uires.idx"] --> C["soui_res/soui_res.rc2<br/>soui_res/resource.h"]
+  C --> D["main.rc<br/>include 两个 rc2"]
+  D --> E["windres → PE-COFF"]
+  E --> F[".incbin → .rodata.embedded"]
+  F --> G["弱符号 _binary_soui_coff_o_start / _end"]
+  G --> H["swinx WindResResourceParser<br/>FindResource / LoadResource"]
+  H --> I["SResProviderPE → SOUI"]
 ```
+
+| 层 | 谁生成 | 说明 |
+|---|---|---|
+| `uires/` | 手工编辑 | 应用资源：`uires.idx` + XML / PNG / SVG。是 soui_sim 的副本，唯一差别是根窗口 `cache="0"`（见坑 16） |
+| `soui_res/*.rc2`、`resource.h` | `uiresbuilder.exe` | 前者列出 9 条 app 资源，后者给出 `UIRES.*` / `R.id.*` / `R.name` / `R.ID.*`（13 个命名 id）。**产物入库**，非 Windows 宿主直接复用 |
+| `main.rc` | 手工编辑 | 只做两件事：`#include "soui_res.rc2"` 和 `#include "theme_sys_res.rc2"`（后者来自 `soui-sys-resource-light`，47 条 SVG/PNG/XML 系统皮肤） |
+| PE-COFF | `windres --target=pe-x86-64 -O coff` | 一个装了 56 条资源的 COFF **对象文件**，81,298 B |
+| `.rodata.embedded` | `xtensa-esp32s3-elf-gcc -c blob.S` | `.incbin` 把 COFF 当数据塞进镜像，导出 `_binary_soui_coff_o_start/_end` |
+| 运行时 | `swinx/src/resapi.cpp` | `LoadModuleResources()` 先试 `dlsym`，静态镜像回落到那两个弱符号，交给 `WindResResourceParser::Parse()`；`SResProviderPE` 通过 Win32 的 `FindResource`/`LoadResource`/`LockResource` 读字节 |
+
+四个实现上必须讲清的点：
+
+1. **为什么要多一次 `.incbin`。** COFF 是给链接器看的**对象文件**，但这里没有任何代码引用它，swinx 是把整个文件当**磁盘映象**解析（先读段头再定位 `.rsrc`）。所以它必须以"数据"的形式存在于镜像里，而不是被链接成代码。
+2. **段名必须是 `.rodata.embedded`。** 桌面管线用 `.section .rdata`，但 IDF 的 linker fragment（`components/esp_common/common.lf`）只把 `.rodata+` / `.srodata+` 收进 flash；`.rdata` 匹配不到任何规则，符号会指到未放置的垃圾地址。`.rodata.embedded` 也是 IDF 自己 `target_add_binary_data()` 用的名字。实测符号落在 `0x3c39f6f8`（DROM 映射区）。
+3. **判断宿主用 `CMAKE_HOST_WIN32`，不能用 `WIN32`。** IDF 的交叉工具链把 `CMAKE_SYSTEM_NAME` 设成 `Generic`，`WIN32` 恒为 `FALSE` —— 第一次配置就是走了"非 Windows 宿主"分支，导致 `uiresbuilder` 的自动重建规则根本没生成。`uiresbuilder.exe` 是宿主工具，能不能跑取决于宿主而不是目标平台。两个 GLOB 都带 `CONFIGURE_DEPENDS`，新增/删除资源文件也能被感知。
+4. **windres 需要补齐 PATH。** 它默认用 `gcc -E -xc -DRC_INVOKED` 预处理 `.rc`；IDF 的 ninja 规则统一走 `cmd.exe`，其 PATH 是 Xtensa 工具链 + IDF python，没有 mingw 的 gcc / cc1 / 运行时 DLL，windres 只报一句含糊的 `preprocessing failed.`（在 Git Bash 里手工跑同一条命令却成功）。`cmake -E env --modify PATH=path_list_prepend:<windres 所在目录>` 只作用于这一条 custom command。试过显式 `--preprocessor=...gcc.exe`：gcc 找得到，但仍缺 PATH 里的运行时目录，照样退出 1。
+
+`app_main.cpp` 里对 `_binary_soui_coff_o_start/_end` 是**强引用**：swinx 那边只声明成 weak（没资源的镜像也要能链接），而 weak undefined 不会把 archive member 拉进来；这里强引用既保证 blob 不被链接器丢掉，也让"忘了挂资源"在链接期就失败，而不是开机后报 resource not found。
+
+**依赖**：需要 mingw 的 `windres`（MSYS2 `mingw-w64-x86_64-binutils`，Linux `binutils-mingw-w64-x86-64`）。它只用来编 `.rc`，C/C++ 仍全部由 Xtensa 工具链编译 —— 和"用不用 MinGW 编译器"无关。非 Windows 宿主上 `uiresbuilder` 跑不了，`soui_res.rc2` / `resource.h` 已入库可直接用；但**新增资源条目或改控件 `name`** 得回 Windows 重新生成一次。
+
+**实测验证**（改 `uires/values/string.xml` 里的一个字符串后直接 `ninja`）：
+
+```
+[1/14]  [uiresbuilder] uires.idx -> soui_res.rc2 + resource.h
+[2/14]  windres: main.rc (app + sys resources) -> COFF
+[5/14]  embedding soui_res COFF into the image (.rodata.embedded)
+[11/14] Linking CXX executable soui_esp32s3.elf
+[12/14] Generating binary image from built executable
+```
+
+14 步增量（全量是 263 步），新字符串同时出现在 COFF 和 `.bin` 里。启动日志：
+
+```
+I (1845) soui_app: resource blob: 81298 bytes at 0x3c39f6f8
+... coffparser,2,parse done, found 56 resources ...
+I (2094) soui_app: system res flags=0x08   (skin/editmenu/msgbox 全部成功，theme 已加载)
+I (2110) soui_app: app res provider added (UIDEF:XML_INIT)
+I (2110) soui_app: named ids registered: 13
+I (4401) soui_app: main window up
+I (7475) soui_app: fps=20.0, paint=44.7ms, flush=0.9ms
+```
+
+`56` 与旧 C 数组的条目数逐个对得上（9 + 47），资源内容也逐字节比对过（除旧数组末尾的 `\0` 终止符和新增注释），帧率无退化。
 
 ## 5. 烧录与观察
 
@@ -184,34 +241,40 @@ python tools/serial_capture.py COM4 22
 ## 6. 实测启动日志
 
 ```
-I (1321) soui_app: == SOUI4 on ESP32-S3 (soui_sim demo) ==
-I (1765) soui_app: Render_Gdi_SCreateInstance -> 1, obj=0x3fc9caac
-I (1770) soui_app: imgdecoder-stb installed
-I (1784) soui_app: SApplication created
-I (2125) soui_app: system res flags=0x08 (bit0-2 = skin/editmenu/msgbox failed, bit3 = theme ok)
-I (2138) soui_app: app res provider added (9 entries)
-I (2139) soui_app: named ids registered: 12
-I (5299) soui_app: main window up, hwnd=0x3fcf4628
-I (5300) soui_app: IMessageLoop=0x3fcb39f4
-I (7551) soui_app: fps=18.0, paint=52.4ms, flush=3.9ms | presents=110 (+110/3s, 2.04/frame), pixels=922800 (+922800/3s), 308 kpix/s
-I (10676) soui_app: fps=18.0, paint=50.9ms, flush=2.9ms | presents=218 (+108/3s, 2.00/frame), pixels=1591248 (+668448/3s), 223 kpix/s
-I (13701) soui_app: fps=17.3, paint=51.4ms, flush=3.2ms | presents=322 (+104/3s, 2.00/frame), pixels=2311896 (+720648/3s), 240 kpix/s
+I (1363) soui_app: == SOUI4 on ESP32-S3 (soui_sim demo) ==
+I (1810) soui_app: Render_Gdi_SCreateInstance -> 1, obj=0x3fc9f3dc
+I (1816) soui_app: imgdecoder-stb installed
+I (1845) soui_app: SApplication created
+I (1845) soui_app: resource blob: 81298 bytes at 0x3c39f6f8
+... coffparser,2,parse done, found 56 resources ...
+I (2094) soui_app: system res flags=0x08 (bit0-2 = skin/editmenu/msgbox failed, bit3 = theme ok)
+I (2110) soui_app: app res provider added (UIDEF:XML_INIT)
+I (2110) soui_app: named ids registered: 13
+I (4401) soui_app: main window up, hwnd=0x3c479e44
+I (4402) soui_app: IMessageLoop=0x3fcbe714
+I (7475) soui_app: fps=20.0, paint=44.7ms, flush=0.9ms | presents=258 (+258/3s, 4.30/frame), pixels=493728 (+493728/3s), 165 kpix/s
+I (10646) soui_app: fps=21.7, paint=42.3ms, flush=0.4ms | presents=534 (+276/3s, 4.25/frame), pixels=696480 (+202752/3s), 68 kpix/s
 ```
 
-五点值得注意：
+六点值得注意：
 
+- `resource blob: 81298 bytes at 0x3c39f6f8` + `found 56 resources`：windres
+  COFF 已经进了 DROM 映射区并被 `WindResResourceParser` 解析成功（9 条 app +
+  47 条系统皮肤），见 4.1。这两个值是判断"资源到底挂上没有"最快的依据。
 - `system res flags=0x08`：`LoadSystemNamedResource()` 的位掩码是**混合语义**——
   0-2 位表示皮肤/editmenu/msgbox **失败**，第 3 位却在主题色**成功**时置位
   （`SApp.cpp:701`）。所以 0x08 = 皮肤和主题色都正常。
+- `named ids registered: 13`：来自 `uiresbuilder` 生成的 `R.name` / `R.id`，
+  布局里 13 个带 `name` 的控件都能用 `EVENT_ID_COMMAND(R.id.xxx, ...)` 找到。
 - `I (1326) spi_flash: flash io: qio`：QIO 真的生效了（镜像头里的 `dio` 是烧录模式，
   见 10.1）。
 - `fps=` 就是帧率，直接由**完成的 `WM_PAINT` 次数**算出来，和屏上 `fps_label`
-  是同一个口径。`presents` 是**blit 次数**，一帧约 2 次，不能当帧率读（见 10.1）。
-- `paint=50ms` + `flush=3ms`：**paint 是绝对瓶颈，SPI 送屏只占 6%**。最初 paint
-  是 133ms——说明"刷屏慢"的直觉是错的，时间全花在 CPU 侧的裁剪/绘制调度上
-  （见 10.1、10.2）。
-- 这组数字是 **两个动画**（扫动 + alpha）的场景；只有一个扫动时是 28ms / 35fps，
-  两者的差就是 layered 窗口的价钱，拆解见 10.3。
+  是同一个口径。`presents` 是**blit 次数**，随重叠窗口数变（历史上 1.8~2 次/帧，
+  现在 4.3 次/帧），不能当帧率读（见 10.1）。
+- `paint=42ms` + `flush=0.4ms`：**paint 是绝对瓶颈，SPI 送屏只占约 1%**。
+  最初 paint 是 133ms——说明"刷屏慢"的直觉是错的，时间全花在 CPU 侧的裁剪/
+  绘制调度上（见 10.1、10.2）。这组数字是**两个动画**（扫动 + alpha）的场景；
+  只有一个扫动时是 28ms / 35fps，两者的差就是 layered 窗口的价钱，拆解见 10.3。
 
 ## 7. 踩坑清单
 
@@ -231,10 +294,10 @@ I (13701) soui_app: fps=17.3, paint=51.4ms, flush=3.2ms | presents=322 (+104/3s,
 | 10 | 启动即 `Guru Meditation / EXCVADDR 0x0`，回溯落在 `STextServiceHelper` 的 `printf` | `SRichEdit.cpp` 里 `printf(...err=%s, dlerror())`：swinx 的 `dlerror()` 按 POSIX 返回 NULL，**newlib 的 vfprintf 对 `%s`+NULL 不判空直接解引用**（glibc 才打 `(null)`）→ 加判空 |
 | 11 | 启动日志 `no LCD driver linked`，屏全黑 | `libmain.a` 里 `__attribute__((weak))` 的桩已满足 `app_main` 的引用，链接器**不会**再抽出 `soui_board_esp32.cpp.obj` → 删掉弱桩，每个钩子一份强定义 |
 | 12 | 跑起来 5 秒后 `task_wdt: CPU 1: soui_ui` | 值动画每 16ms 请求一帧，而一帧要几百 ms（cairo + polling SPI），一次性排空消息队列会让 UI 任务连续几秒不让出，IDLE1 饿死 → 给消息泵加预算：每轮最多 8 条 + 最长 200ms，然后 `vTaskDelay(1)`（1 tick = 1ms，见第 9 节第 5 点） |
-| 13 | PNG 全部 `resource content ... not found!`（装了 imgdecoder 也没用） | 日志来自 `SResProviderMgr::LoadImage` 的**第二次**判断：`HasResource` 通过、但 `provider->LoadImage` 返回 NULL。我们的 MemResProvider 当时直接 `return NULL` → 照 `SResProviderPE` 的做法调 `SResLoadFromMemory::LoadImage(bytes,len)`（内部走 `GETRENDERFACTORY->CreateBitmap` + `LoadFromBitmap(_memory)`） |
+| 13 | PNG 全部 `resource content ... not found!`（装了 imgdecoder 也没用） | 日志来自 `SResProviderMgr::LoadImage` 的**第二次**判断：`HasResource` 通过、但 `provider->LoadImage` 返回 NULL。当时的 `MemResProvider` 直接 `return NULL` → 照 `SResProviderPE` 的做法调 `SResLoadFromMemory::LoadImage(bytes,len)`（内部走 `GETRENDERFACTORY->CreateBitmap` + `LoadFromBitmap(_memory)`）。**现在已换成 `SResProviderPE`，这条由它原生满足**（见 4.1） |
 | 14 | 引 `res.mgr/SResProvider.h` 报 `SStringT does not name a type` | 该头依赖 `souistd.h` 提供的 SStringT/SMap → 先 `#include <souistd.h>` |
 | 15 | 触摸"点了没反应，过几秒才动"，且一次画一帧期间的点按直接丢失 | 两个独立缺陷：①`updateMsgQueue` 每个 16ms 动画 tick 都往队列压一条 `WM_TIMER`，慢渲染下队列无限增长，输入排在几百条过期计时器后面（Win32 的 `WM_TIMER` 是生成型消息，同 id 最多一条）；②采样在消息泵里做，一帧 100ms 内的按下+抬起**根本没被读到**。修法见第 9 节 |
-| 16 | 脏矩形只有 40×16，一次 `WM_PAINT` 却要 162ms | 布局根窗口 `cache="1"`：`_PaintClient` 每次失效都把**整窗**重画进 cache 表面，再整幅 `AlphaBlend`。桌面在显存里做划算，PSRAM 上不划算 → `gen_uires.py --strip-window-cache` 生成时把 `cache="1"` 改成 `"0"`（162ms → 126ms） |
+| 16 | 脏矩形只有 40×16，一次 `WM_PAINT` 却要 162ms | 布局根窗口 `cache="1"`：`_PaintClient` 每次失效都把**整窗**重画进 cache 表面，再整幅 `AlphaBlend`。桌面在显存里做划算，PSRAM 上不划算 → 根窗口改 `cache="0"`（162ms → 126ms）。旧的 `gen_uires.py --strip-window-cache` 是在**生成时**做这个替换；现在资源按原样编译，所以 `uires/xml/dlg_main.xml` 里直接写的就是 `"0"`，别从 soui_sim 复制时把它带成 `"1"` |
 | 17 | richedit41 一链就 53 个 `undefined reference` | 它是个完整 Win32 程序：剪贴板、OLE 剪贴板、拖放、IME、profile、kernel32 文件 API 全用。→ `swinx/src/platform/freertos/win32_rich.cpp` 补桩，剪贴板**真转发**到 `SConnection::SClipboard`，其余惰性返回失败（不要假装成功，否则 TOM 的 Save 会写出半截内容） |
 | 18 | CPU 160→240MHz + 全局 `-O2` 只提升约 20% | 当时误判为"瓶颈是 PSRAM 访存、加时钟没用"。**这个结论后来被推翻**，见第 10.1 节：真正的瓶颈是每帧几十次 cairo 裁剪状态操作（固定开销，与像素数无关） |
 | 19 | 加了 `[prof]` 才发现 `updRgn=6073px` 但 `dirty=76800px` | `BeginPaint` 没按 Win32 语义把 DC 裁到 update region，`GetClipBox()` 报整窗 → `SHostWnd::OnPrint()` 把 `rcInvalid` 并成整窗 → present 变成整幅 BitBlt（15.7ms/帧） |
@@ -262,10 +325,10 @@ I (13701) soui_app: fps=17.3, paint=51.4ms, flush=3.2ms | presents=322 (+104/3s,
 
 | 桌面/模拟器 | 这块板子 |
 |---|---|
-| `SAppCfg::DoConfig()`（头文件实现，内部 `CreateImgDecoder` 走 dlopen） | 手写装配：render 工厂 → `Decoder_Stb_SCreateInstance` → `SetImgDecoderFactory` → `SApplication` → `LoadSystemNamedResource` → `AddResProvider(app, "UIDEF:XML_INIT")` → `InitXmlNamedID` |
-| uires → windres → `.section .rdata` | `tools/gen_uires.py` 生成字符串字面量表，`MemResProvider` 直接供字节 |
-| `uiresbuilder` 的 `R.id.*` | `main/soui_resource.h` 手写同名枚举（编号必须与生成物一致） |
-| 系统资源 `soui_sys_res/theme_sys_res`（PNG 版） | 用 **SVG 版**（`demos/android-demo/.../theme_sys_res`）：render-gdi/cairo 走 nanosvg，不依赖位图解码 |
+| `SAppCfg::DoConfig()`（头文件实现，内部 `CreateImgDecoder` 走 dlopen） | 手写装配：render 工厂 → `Decoder_Stb_SCreateInstance` → `SetImgDecoderFactory` → `SApplication` → 两个 `RES_PE` provider（`LoadSystemNamedResource` / `AddResProvider(app, "UIDEF:XML_INIT")`）→ `InitXmlNamedID` |
+| uires → windres → `.section .rdata` | 同一条路，只是 COFF 用 `.incbin` 落到 `.rodata.embedded`，运行时 `SResProviderPE` 读（见 4.1）。**不再生成 C 数组** |
+| `uiresbuilder` 的 `R.id.*` | 同一个 `uiresbuilder` 生成的 `soui_res/resource.h`，`R.id.*` / `R.ID.*` / `R.name` 直接用 |
+| 系统资源 `soui_sys_res/theme_sys_res`（PNG 版） | 用 **SVG 版**（`soui-sys-resource-light/theme_sys_res`，内容与 `demos/android-demo/.../theme_sys_res` 只差一行 `_skin.sys.selband`）：render-gdi/cairo 走 nanosvg，不依赖位图解码 |
 | `main()` + `vTaskStartScheduler()` | `app_main()` + `xTaskCreatePinnedToCore(49152B, prio 5, core 1)` |
 | SDL 事件泵 + `SimHalRenderIfDirty` | `soui_board_poll_touch()` + `swinxFbPresent` 回调 |
 | `PeekMessage` + `IMessageLoop::OnMsg` | 同左，但每轮限 8 条消息 / 200ms（见坑 12） |
@@ -793,8 +856,9 @@ python -m esptool -p COM4 -b 921600 write_flash --flash_mode dio --flash_freq 80
   下层重绘时用 `composeAbove()` 把上层重贴回来；上层消失/挪走时只用
   `composeRegion()` 重排它自己那块，或者干脆 `invalidateBelow()` 交给下层
   自己重绘（10.6）。整屏 `composeScreen()` 现在只在"不知道范围"时兜底。
-- 资源是**编译期嵌入的字符串字面量**，改资源要重跑 `gen_uires.py` 再编译；
-  后续应换成独立分区 + `IResProvider`，这样可以 OTA 换皮肤。
+- 资源现在是 **windres COFF 数据段 + `SResProviderPE`**（4.1），改原始文件重新
+  编译即可；但它仍编在 app 分区里，换皮肤必须整包重烧。要 OTA 换皮肤得改成
+  独立分区 + 自定义 `IResProvider`。
 - `<edit>` 已可用（richedit41 静态链接），但**没有输入法**：板上没有键盘，
   `WM_CHAR` 只能由 `SwinxInjectKey` 注入；IME 接口是惰性桩，中文输入需要
   内嵌 TTF + FreeType + 一个软键盘控件。

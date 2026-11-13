@@ -2,7 +2,7 @@
 
 > 全部命令在 **Git Bash** 里执行，工作目录固定为
 > `/d/work/soui4/soui-freertos/esp32s3`。
-> 本文每条命令都已在本机实测通过（2026-11-13，固件 `soui_esp32s3.bin` = 4,495,680 B）。
+> 本文每条命令都已在本机实测通过（2026-11-13，固件 `soui_esp32s3.bin` = 4,537,248 B）。
 
 ---
 
@@ -37,6 +37,7 @@ cd /d/work/soui4/soui-freertos/esp32s3 && python tools/serial_capture.py COM4 12
 | 工程目录 | `D:\work\soui4\soui-freertos\esp32s3`（`soui-freertos` 必须在 `soui4` 目录下，`CMakeLists.txt` 靠 `../../` 找 `SOUI/include/souistd.h`） |
 | ESP-IDF | v5.4.1，`D:\work\xiaozi\2.8inch_IPS_ESP32-S3_ILI9341V_ES3C28P_ES3N28P_V1.0\esp-idf-v5.4.1` |
 | 工具链 | Xtensa GCC 14.2.0 / CMake 3.30.2 / Ninja 1.12.1 / esptool 4.13.0 / Python 3.13.16 |
+| 资源编译器 | mingw 的 `windres`（本机 `C:\msys64\mingw64\bin\windres.exe`），**必须在 PATH 里**——CMake configure 用 `find_program` 找它；它只编 `.rc`，不参与 C/C++ 编译 |
 | 串口 | `COM4`（原生 USB-Serial/JTAG，303A:1001） |
 | 烧录波特率 | 921600（462800/460800 也能用，只是慢一倍） |
 | 日志波特率 | 115200 8N1（由 `CONFIG_ESP_CONSOLE_UART_BAUDRATE` 决定） |
@@ -85,7 +86,7 @@ echo "exit=$?"
 预期输出（`b.err` 末尾）：
 
 ```
-soui_esp32s3.bin binary size 0x449940 bytes. Smallest app partition is 0x600000 bytes. 0x1b66c0 bytes (29%) free.
+soui_esp32s3.bin binary size 0x453ba0 bytes. Smallest app partition is 0x600000 bytes. 0x1ac460 bytes (28%) free.
 Bootloader binary size 0x57c0 bytes. 0x2840 bytes (31%) free.
 ```
 
@@ -154,22 +155,32 @@ Git Bash 里 `MSYSTEM=MINGW64` 一定存在，而 `cmake` 配置时会调
 3. **全量编译 15~20 分钟。** 源码含 cairo + pixman + richedit41，`-j2` 下就是这个
    速度，别以为是挂死。全量触发条件：改 `sdkconfig`、改全局 `-O` 级别、删 `build/`。
 
-### 2.4 改了 UI 资源要重跑生成器
+### 2.4 改了 UI 资源：直接重新编译即可
 
-`main/generated/uires_res.cpp` 是把 `uires` 目录（XML / PNG / SVG）编成 C++ 表的产物，
-改了布局就必须重新生成，否则屏幕上看到的还是旧界面：
+资源**不再是** Python 生成的 C 数组。改 `uires/` 下的 XML / PNG / SVG（或
+`soui-sys-resource-light/theme_sys_res/` 下的系统皮肤）后，直接跑 2.1 的 `ninja`，
+CMake 会自动串起整条链：
 
-```bash
-python tools/gen_uires.py \
-    --app-uires /d/work/soui4/soui-freertos/soui_sim/uires \
-    --sys-res /d/work/soui4/demos/android-demo/app/src/main/assets/soui_sys_res/theme_sys_res \
-    --out main/generated/uires_res.cpp --strip-window-cache
-```
+1. `uiresbuilder` 重生成 `soui_res/soui_res.rc2` + `resource.h` —— 改控件
+   `name`、增删资源条目时 `R.id` / `R.name` 也跟着更新；
+2. `windres` 重编 `main.rc` → PE-COFF；
+3. `.incbin` 重新嵌入 → 重新链接 → 重新生成 `.bin`。
 
-`--strip-window-cache` 不是可选项：不加的话根窗口的 `cache="1"` 会让每帧整窗重绘
-加整幅 AlphaBlend。生成后再走 2.1 编译。
+典型增量 **14 步**（全量 263 步），十几秒。GLOB 带 `CONFIGURE_DEPENDS`，
+新增/删除资源文件也能被感知，不需要手工重跑 cmake。完整链路见
+[README 4.1](README.md)。
 
-（这个脚本用系统 `python` 就跑得了，不需要 IDF 环境。）
+两个前提：
+
+- 需要 mingw 的 `windres`（本机在 `C:\msys64\mingw64\bin`）。没装的话
+  **configure 阶段**就会 `FATAL_ERROR` 并给出安装命令。
+- `uires/xml/dlg_main.xml` 的根窗口必须是 `cache="0"`：旧生成器靠
+  `--strip-window-cache` 在生成时改写，现在资源按原样编译，所以这个值直接
+  写在源文件里。从 `soui_sim` 再复制资源时别把它带回 `"1"`，否则每帧整窗
+  重绘 + 整幅 AlphaBlend，fps 掉到 14 左右。
+
+> 非 Windows 宿主跑不了 `uiresbuilder.exe`，`soui_res.rc2` / `resource.h`
+> 已入库可直接复用；但**新增资源条目或改控件 `name`** 得回 Windows 生成一次。
 
 ### 2.5 产物
 
@@ -215,7 +226,7 @@ cd /d/work/soui4/soui-freertos/esp32s3/build
 预期输出（末尾）：
 
 ```
-Wrote 4495680 bytes (2164546 compressed) at 0x00010000 in 33.7 seconds (effective 1066.0 kbit/s)...
+Wrote 4537248 bytes (2185577 compressed) at 0x00010000 in 34.0 seconds (effective 1067.2 kbit/s)...
 Hash of data verified.
 Compressed 3072 bytes to 104...
 Writing at 0x00008000... (100 %)
@@ -276,9 +287,15 @@ grep -E "fps=|panic|abort|WDT" cap.txt
 正常启动 + 稳态的样子：
 
 ```
-I (1357) soui_app: == SOUI4 on ESP32-S3 (soui_sim demo) ==
-I (7385) soui_app: fps=21.3, paint=41.7ms, flush=0.9ms | presents=278 (+278/3s, 4.34/frame), pixels=507800 (+507800/3s), 169 kpix/s
-I (10492) soui_app: fps=22.7, paint=39.4ms, flush=0.4ms | presents=568 (+290/3s, 4.26/frame), pixels=720208 (+212408/3s), 71 kpix/s
+I (1363) soui_app: == SOUI4 on ESP32-S3 (soui_sim demo) ==
+I (1845) soui_app: resource blob: 81298 bytes at 0x3c39f6f8
+... coffparser: parse done, found 56 resources ...
+I (2094) soui_app: system res flags=0x08
+I (2109) soui_app: app res provider added (UIDEF:XML_INIT)
+I (2109) soui_app: named ids registered: 13
+I (4401) soui_app: main window up
+I (7475) soui_app: fps=20.0, paint=44.7ms, flush=0.9ms | presents=258 (+258/3s, 4.30/frame), pixels=493728 (+493728/3s), 165 kpix/s
+I (10646) soui_app: fps=21.7, paint=42.3ms, flush=0.4ms | presents=534 (+276/3s, 4.25/frame), pixels=696480 (+202752/3s), 68 kpix/s
 ```
 
 健康基线（双动画：橙块扫动 + 蓝块 alpha 呼吸）：
@@ -286,9 +303,11 @@ I (10492) soui_app: fps=22.7, paint=39.4ms, flush=0.4ms | presents=568 (+290/3s,
 | 指标 | 正常范围 | 含义 |
 |---|---|---|
 | 首个 `== SOUI4 ... ==` | 1.0~1.5 s | 固件起来 |
-| 首帧上屏 | 约 2.6 s | 布局 + SVG 皮肤 + cairo 首帧 + 整屏 SPI |
-| `fps` | 20~23 | **看这个**，等于 `1000/(paint+flush)` |
-| `paint` | 39~46 ms | 一帧的绘制耗时 |
+| `resource blob: 81298 bytes` + `found 56 resources` | 1.8~2.1 s | **必须出现**：windres COFF 挂上了且被解析（见 README 4.1） |
+| `system res flags=0x08` / `named ids registered: 13` | 约 2.1 s | 系统皮肤与命名 id 都加载成功 |
+| 首帧上屏（`main window up`） | 约 4.4 s | 布局 + SVG 皮肤 + cairo 首帧 + 整屏 SPI |
+| `fps` | 20~22 | **看这个**，等于完成的 `WM_PAINT` 次数 / 3 s |
+| `paint` | 42~45 ms | 一帧的绘制耗时 |
 | `flush` | < 1.5 ms | 提交到屏 |
 | `presents` | 4~5 次/帧 | **不是帧率**，是脏矩形 blit 次数 |
 | `panic` / `abort` / `WDT` | 无 | 有就是崩了 |
@@ -309,8 +328,11 @@ I (10492) soui_app: fps=22.7, paint=39.4ms, flush=0.4ms | presents=568 (+290/3s,
 | 烧录 `Failed to connect to ESP32-S3` | 串口被占用 / 没进下载模式 | 关掉串口助手；按住 BOOT 再点复位；降 `-b 460800` |
 | 烧完屏幕没反应、日志停在 `rst:0x1` | 只烧了 app 而分区表/引导不匹配 | 3.2 全量烧 `@flash_args` |
 | `bash: ./tools/idf_env.sh: No such file or directory`，可 `ls ./tools/idf_env.sh` 偏偏能看到 | 命令行里混进了**不可见字符**（BOM `U+FEFF` / 零宽空格 `U+200B`），从网页或聊天窗口复制时带进来的；文件本身没问题 | 重打这行，别粘贴。自查：`history \| tail -3 \| cat -A`，行首出现 `M-oM-;M-?`（BOM）或 `M-bM-^@M-^K`（ZWSP）就是它 |
-| 屏幕上的界面和改过的 XML 不一致 | 没重跑 `gen_uires.py` | 见 2.4，然后重编重烧 |
-| `fps` 掉到 14 左右 | 有东西整屏重绘（窗口 `cache="1"`、整屏 compose） | 查 `--strip-window-cache`、看 README 10.x |
+| 屏幕上的界面和改过的 XML 不一致 | 改完没重新编译，或者编译了没重烧 | 见 2.4：`ninja` 会自动重跑资源链；再走 3.2 烧录 |
+| `fps` 掉到 14 左右 | 有东西整屏重绘，最常见是 `uires/xml/dlg_main.xml` 的 `cache` 被从 soui_sim 复制成 `"1"` | 改回 `"0"` 重编重烧，看 README 坑 16 |
+| `windres: preprocessing failed.` | `windres` 找不到 mingw 的 gcc 预处理器 | 正常构建不会遇到（`cmake/soui_res.cmake` 已用 `cmake -E env --modify` 补齐 PATH）。手工绕开 `idf_env.sh` 直接敲 windres 才会；用 2.1 的标准命令 |
+| configure 阶段 `[soui_res] windres not found` | 没装 mingw 的 binutils | MSYS2：`pacman -S mingw-w64-x86_64-binutils`；Linux：`apt install binutils-mingw-w64-x86-64` |
+| `resource blob: 0 bytes` / 开机报 `resource not found` | 资源 blob 没被链进镜像 | 检查 `app_main.cpp` 对 `_binary_soui_coff_o_start` 的强引用是否还在；见 README 4.1 |
 
 ---
 
@@ -385,7 +407,9 @@ $env:PATH = "$TOOLS\tools\xtensa-esp-elf\esp-14.2.0_20241119\xtensa-esp-elf\bin;
             "$TOOLS\tools\ninja\1.12.1\ninja;" +
             "$TOOLS\tools\cmake\3.30.2\bin;" +
             "$TOOLS\python_env\idf5.4_py3.13_env\Scripts;" +
-            "$IDF\tools;" + $env:PATH
+            "$IDF\tools;" +
+            "C:\msys64\mingw64\bin;" +   # windres + 它的 gcc 预处理器
+            $env:PATH
 
 Set-Location D:\work\soui4\soui-freertos\esp32s3
 ninja -C build -j2                                    # 编译
@@ -395,7 +419,7 @@ Set-Location ..
 python tools\serial_capture.py COM4 12                 # 抓日志
 ```
 
-三个 PowerShell 专属坑，都是实测撞出来的：
+四个 PowerShell 专属坑，都是实测撞出来的：
 
 1. **`@flash_args` 必须加引号写成 `"@flash_args"`。** PowerShell 把行首的 `@`
    当 splatting 运算符（`@varname` 展开成参数数组），`@flash_args` 被静默吞掉，
@@ -429,6 +453,13 @@ python tools\serial_capture.py COM4 12                 # 抓日志
    另外 PowerShell 5.1 对原生命令的 stderr 会包成 `NativeCommandError` 打印一堆红字，
    但**退出码仍是 0 就是成功**，别被红色输出吓到。
 
+4. **PATH 里要有 `windres`。** 资源脚本 `main.rc` 由 mingw 的 `windres` 编译，
+   CMake configure 阶段 `find_program(windres)` 找不到就直接 `FATAL_ERROR`。
+   本机 `C:\msys64\mingw64\bin` 默认已在 PATH 里，上面的环境块又显式加了一遍
+   （放在 Xtensa 工具链之后，不会抢 `gcc`）。**构建阶段不用担心**：
+   `cmake/soui_res.cmake` 会用 `cmake -E env --modify` 单独给 windres 那条命令
+   补齐 PATH，让它的 `gcc -E` 预处理器可用（见 README 4.1）。
+
 ### 7.3 cmd：批处理写法
 
 PowerShell 的限制不适用于 cmd（`@flash_args` 在 cmd 里原样传给程序，esptool 正常展开）：
@@ -439,7 +470,7 @@ set IDF_PATH=%ROOT%\esp-idf-v5.4.1
 set IDF_TOOLS_PATH=%ROOT%\.espressif
 set ESP_ROM_ELF_DIR=%ROOT%\.espressif\tools\esp-rom-elfs\20241011\
 set CCACHE_DISABLE=1
-set PATH=%ROOT%\.espressif\tools\xtensa-esp-elf\esp-14.2.0_20241119\xtensa-esp-elf\bin;%ROOT%\.espressif\python_env\idf5.4_py3.13_env\Scripts;%ROOT%\.espressif\tools\ninja\1.12.1\ninja;%ROOT%\.espressif\tools\cmake\3.30.2\bin;%IDF_PATH%\tools;%PATH%
+set PATH=%ROOT%\.espressif\tools\xtensa-esp-elf\esp-14.2.0_20241119\xtensa-esp-elf\bin;%ROOT%\.espressif\python_env\idf5.4_py3.13_env\Scripts;%ROOT%\.espressif\tools\ninja\1.12.1\ninja;%ROOT%\.espressif\tools\cmake\3.30.2\bin;%IDF_PATH%\tools;C:\msys64\mingw64\bin;%PATH%
 
 cd /d D:\work\soui4\soui-freertos\esp32s3
 ninja -C build -j2
@@ -452,7 +483,8 @@ python -m esptool --chip esp32s3 -p COM4 -b 921600 write_flash @flash_args
 > `C:\Windows\system32\cmd.exe /C "...python.exe ..."`，也就是 ninja 内部一直在用
 > cmd，对外层 shell 没有要求；② cmd 不把行首 `@` 当特殊字符，且 `flash_args` 里
 > 没有 `%`、`!` 这类会被 cmd 展开的东西。如果真跑出问题，十有八九是 `set PATH`
-> 少了一段，用 `echo %PATH%` 对照 7.2 的六个目录。
+> 少了一段，用 `echo %PATH%` 对照 7.2 的七个目录（含 `C:\msys64\mingw64\bin`，
+> 少了它 configure 会报 `[soui_res] windres not found`）。
 
 ### 7.4 该选哪个
 

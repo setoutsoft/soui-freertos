@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Main window layout.
+
+  Written the way wizard/CmakeApp writes its layouts:
+    * a <caption> with the app icon, the title from @string and the SOUI system
+      caption buttons (_skin.sys.btn.minimize / _skin.sys.btn.close),
+    * the window background is the system nine-patch _skin.sys.wnd.bkgnd,
+    * colours / strings come from uires/values, never from literals,
+    * text styles (cls_txt_title / cls_txt_sub) come from uidef/init.xml.
+
+  ESP32-S3 copy of soui_sim/uires -- this is the resource tree compiled into the
+  firmware by windres (see main/CMakeLists.txt), so editing a file here and
+  rebuilding is all it takes.  One difference from the simulator copy:
+
+    * root cache="0" instead of "1".  cache="1" makes SOUI render the whole
+      window into an offscreen surface and AlphaBlend it back on every
+      invalidation; on a PSRAM-bandwidth-bound target that is measurably slower
+      than drawing straight into the dirty rect (README 10.x item 16: 162ms ->
+      126ms).  The old gen_uires.py pipeline did this rewrite at generation
+      time (--strip-window-cache); with the resources compiled verbatim by
+      windres the difference has to live in the source layout.
+-->
+<SOUI name="mainWindow" title="@string/title" wndType="appMain" appWnd="1" margin="0" resizable="0" translucent="0">
+  <root skin="_skin.sys.wnd.bkgnd" cache="0" width="320" height="240"
+        focusAniSkin="skin_focus_ani" focusAni:duration="200" focusAni:interpolator="Decelerate"
+        fade:duration="200" fade:interpolator="Accelerate">
+    <!-- simulated title bar -->
+    <caption pos="0,0,-0,28" font="adding:2" layout="hbox" gravity="center" padding_left="10">
+      <img skin="app_logo" size="16,16"/>
+      <text name="txt_title" text="@string/title" extend_left="6" colorText="@color/thm_txt_normal"/>
+      <window size="0,0" weight="1" visible="0"/>
+      <imgbtn name="btn_min" skin="_skin.sys.btn.minimize" animate="1"/>
+      <imgbtn name="btn_close" skin="_skin.sys.btn.close" tip="close" animate="1"/>
+    </caption>
+
+    <!-- content: bitmap on the left, description on the right -->
+    <img name="img_view" pos="14,32,78,96"/>
+    <text class="cls_txt_title" text="@string/hello" pos="88,32,-14,52"/>
+    <text class="cls_txt_sub" text="@string/sub" pos="88,54,-14,102"/>
+
+    <!--
+      combobox (dropDown=1: the embedded edit is hidden, the control draws the
+      selected text itself).  SComboBase paints only the text and the built-in
+      drop button (SKIN_SYS_DROPBTN), it never draws its own skin, so the white
+      rounded field comes from the wrapper window's skin_field.
+
+      The list itself lives in a *separate* swinx window (SDropDownWnd) that
+      blits into the same framebuffer.  The platform keeps a z-order list
+      (creation order) and recomposes: what this window paints while the list is
+      open re-blits the list on top, and closing the list repaints the main
+      window underneath.  So the combo may hold focus like on Windows -- the
+      focus animation repainting the whole root no longer wipes the list.
+      Kept out of anim_box / fade_box's columns only so the demo reads clearly:
+      the list opens downward over the button row and the description text.
+    -->
+    <window name="cbx_field" pos="14,106,-14,130" skin="skin_field">
+      <combobox name="cbx_speed" pos="0,0,-0,-0" dropDown="1" focusable="1" dropHeight="90" curSel="1"
+                animateTime="0" padding="6,0,0,0" drawFocusRect="0" font="adding:-1">
+        <dropdownStyle>
+          <root skin="skin_popup" colorBkgnd="@color/thm_color"/>
+        </dropdownStyle>
+        <!-- SListBox 只画条目,背景和 1px 描边由上面的 skin_popup 提供 -->
+        <liststyle itemHeight="20" margin="2" colorBkgnd="@color/thm_color"/>
+        <items>
+          <item text="@string/cbx_slow"/>
+          <item text="@string/cbx_normal"/>
+          <item text="@string/cbx_fast"/>
+        </items>
+      </combobox>
+    </window>
+
+    <!-- commands handled by CMainDlg via EVENT_ID_COMMAND(R.id.xxx) -->
+    <button name="btn_test" class="normalbtn" pos="14,134,110,158" text="@string/btn_switch" animate="1" tip="PNG / SVG"/>
+    <button name="btn_anim" class="normalbtn" pos="118,134,214,158" text="@string/btn_anim" animate="1" tip="freeze / resume"/>
+
+    <!--
+      Real <edit>: SEdit -> SRichEdit -> richedit41's CreateTextServices().
+      On a desktop build that symbol is dlopen()ed from the system Msftedit.dll;
+      this port links the vendored richedit41 in statically instead (see
+      SOUI_FR_USE_RICHEDIT in soui-freertos/cmake/SouiFreeRTOS.cmake), which is
+      what makes an editable control possible at all here.  Its whole point in
+      this demo is the keyboard path: WM_CHAR inserts, VK_BACK deletes, arrows
+      move the caret -- all of which require TranslateMessage() to hand out
+      proper characters instead of the raw VK.
+      The 1px frame + white fill come from the wrapper (SRichEdit draws only the
+      text), same trick as cbx_field above.
+    -->
+    <window name="edt_field" pos="14,162,-14,186" skin="skin_field">
+      <edit name="edt_input" pos="4,0,-6,-0" font="adding:-1" colorBkgnd="@color/thm_color"
+            cueText="@string/edt_cue" cueColor="@color/thm_txt_disabled"/>
+    </window>
+
+    <text class="cls_txt_sub" text="@string/anim_label" pos="14,188,-14,202"/>
+
+    <!--
+      Animation targets, driven by CMainDlg::onAnimationUpdate().
+
+      anim_box  -- swept 14..260 px by a SIntAnimator (m_moveAni).  Position
+                   driven, so it repaints its old + new rect and nothing else.
+      fade_box  -- a *layered* window whose alpha is driven by a SByteAnimator
+                   (m_fadeAni).  Layered means SOUI composites it through an
+                   offscreen surface and AlphaBlends the whole rect every frame,
+                   so it is the most expensive window in this demo.  It is kept
+                   on purpose: it is exactly the cost class a real app hits with
+                   any translucent overlay, and it is the honest counterweight
+                   to a pure position animation.
+    -->
+    <window name="anim_box" pos="14,204,54,220" colorBkgnd="@color/orange"/>
+    <window name="fade_box" pos="14,224,54,240" colorBkgnd="@color/blue"/>
+
+    <!--
+      Live frame-rate readout, updated by CMainDlg's 500ms timer from
+      soui_board_frame_count(), i.e. finished WM_PAINTs per second -- the same
+      quantity the vendor LVGL build calls "fps".
+      Sits in the dead space right of fade_box (x 196..306, y 222..240) so
+      neither anim_box's sweep row nor fade_box's column covers it.
+    -->
+    <text name="fps_label" class="cls_txt_sub" pos="196,222,306,240" text="-- fps"/>
+  </root>
+</SOUI>

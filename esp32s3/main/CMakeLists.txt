@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# main -- app_main() + board glue + in-memory XML resource provider
+# main -- app_main() + board glue
 #   <soui4>/soui-freertos/esp32s3/main/../../.. == <soui4>
 # ---------------------------------------------------------------------------
 get_filename_component(SOUI_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
@@ -27,12 +27,6 @@ idf_component_register(
         "soui_demo.cpp"
         "soui_board.cpp"
         "soui_board_esp32.cpp"
-        "mem_res_provider.cpp"
-        # 56 (type,name,blob) entries: the soui_sim uires + soui_sys_res SVG
-        # theme, emitted by tools/gen_uires.py.  Regenerate when the uires
-        # change -- plain string literals, because IDF's linker scripts do not
-        # collect the windres ".section .rdata" blob.
-        "generated/uires_res.cpp"
     INCLUDE_DIRS
         "."
         "${SWINX_DIR}"
@@ -68,3 +62,24 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
     -fexceptions
     -std=gnu++17
     -include soui_idf_compat.h)
+
+# ---------------------------------------------------------------------------
+# resources: uires -> windres COFF -> .rodata.embedded blob
+#
+# Same chain soui_sim (and every desktop SOUI app) uses, adapted to ESP-IDF:
+# the COFF is embedded with .incbin instead of being linked as an object, and
+# the container section is .rodata.embedded so IDF's linker fragments put it in
+# flash.  At runtime SResProviderPE serves it -- see app_main.cpp.
+#
+# Editing a layout / image / string: change it under ../uires (or the system
+# theme in soui-sys-resource-light), rebuild.  ../soui_res/*.rc2 is regenerated
+# by uiresbuilder automatically on Windows and is committed so a non-Windows
+# host can still build.
+# ---------------------------------------------------------------------------
+include(${CMAKE_CURRENT_LIST_DIR}/../cmake/soui_res.cmake)
+soui_idf_add_resources(${COMPONENT_LIB})
+# resource.h: R.id.* / R.name / UIRES.* (what a wizard SOUI app includes)
+target_include_directories(${COMPONENT_LIB} PRIVATE "${SOUI_RES_INCLUDE_DIR}")
+# Build ordering only: make sure resource.h exists before this component's TUs
+# are compiled (it is listed as a source so CMake knows the dependency).
+target_sources(${COMPONENT_LIB} PRIVATE "${SOUI_RES_INCLUDE_DIR}/resource.h")

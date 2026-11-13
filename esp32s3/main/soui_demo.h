@@ -2,13 +2,12 @@
  * soui_demo.h -- the soui_sim demo window, ported to ESP32-S3.
  *
  * Identical structure to <soui-freertos>/soui_sim/MainDlg.h (SHostWnd + SDpiHandler
- * + IAnimatorUpdateListener, EVENT_MAP / MSG_MAP), with two differences:
- *
- *   * the layout id and the command ids come from soui_resource.h instead of
- *     the uiresbuilder-generated header (the resources themselves are served
- *     from RAM, see mem_res_provider.cpp),
- *   * nothing here depends on SDL -- input arrives from soui_board_poll_touch()
- *     in the pump, which posts real WM_LBUTTONDOWN / WM_MOUSEMOVE messages.
+ * + IAnimatorUpdateListener, EVENT_MAP / MSG_MAP), including how the layout id
+ * and the command ids are written: UIRES.LAYOUT.XML_MAINWND and R.id.* come
+ * from the uiresbuilder-generated resource.h, which is what a wizard-style
+ * SOUI app uses.  The only difference is that nothing here depends on SDL --
+ * input arrives from soui_board_poll_touch() in the pump, which posts real
+ * WM_LBUTTONDOWN / WM_MOUSEMOVE messages.
  */
 #ifndef SOUI_ESP32S3_SOUI_DEMO_H_
 #define SOUI_ESP32S3_SOUI_DEMO_H_
@@ -19,7 +18,9 @@
 #include <core/Svg.h>
 #include <valueAnimator/SValueAnimator.h>
 
-#include "soui_resource.h"
+// R.id.* / R.name / UIRES.* (generated from uires/uires.idx by uiresbuilder).
+// Declarations only here -- app_main.cpp defines the tables (INIT_R_DATA).
+#include "resource.h"
 
 class CMainDlg : public SNS::SHostWnd
               , public SNS::SDpiHandler<CMainDlg>
@@ -50,9 +51,9 @@ class CMainDlg : public SNS::SHostWnd
     EVENT_MAP_BEGIN()
         EVENT_NAME_COMMAND(L"btn_close", OnClose)
         EVENT_NAME_COMMAND(L"btn_min", OnMinimize)
-        EVENT_ID_COMMAND(soui_demo_res::ID_BTN_TEST, OnSwitchImage)
-        EVENT_ID_COMMAND(soui_demo_res::ID_BTN_ANIM, OnToggleAnim)
-        EVENT_ID_HANDLER(soui_demo_res::ID_CBX_SPEED, SNS::EventCBSelChange::EventID, OnCbxSpeedChange)
+        EVENT_ID_COMMAND(R.id.btn_test, OnSwitchImage)
+        EVENT_ID_COMMAND(R.id.btn_anim, OnToggleAnim)
+        EVENT_ID_HANDLER(R.id.cbx_speed, SNS::EventCBSelChange::EventID, OnCbxSpeedChange)
     EVENT_MAP_END2(SNS::SHostWnd)
 
     BEGIN_MSG_MAP_EX(CMainDlg)

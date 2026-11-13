@@ -5,21 +5,19 @@
  * PNG/SVG image swap, two value animators (sweep + fade), a dropdown combobox
  * that retimes the animators, and the caption buttons.  What changed:
  *
- *   * image/svg come from the RAM resource table (generated/uires_res.cpp)
- *     instead of the windres blob -- GETRESPROVIDER->LoadImage() still needs an
- *     imgdecoder (not linked yet, so the PNG half stays NULL and the SVG half
- *     is what you see), CreateSvgFromResId() works because nanosvg is part of
- *     SOUI core.
- *   * <edit> needs richedit41 (not linked); if it fails, that one control is
- *     missing and the rest of the layout is unaffected -- see README.md.
+ *   * image/svg resolve through SResProviderPE -> the windres COFF blob
+ *     (GETRESPROVIDER->LoadImage / CreateSvgFromResId), i.e. the same path a
+ *     Windows SOUI app takes.  PNG needs the imgdecoder-stb factory installed
+ *     in app_main.cpp; SVG goes through nanosvg, which is part of SOUI core.
+ *   * <edit> needs richedit41; if it fails, that one control is missing and
+ *     the rest of the layout is unaffected -- see README.md.
  */
 #include "soui_demo.h"
 
 #include <interface/SResProvider-i.h>
 #include <control/SCmnCtrl.h> // SImageWnd::SetImage / SetSvg
 
-#include "soui_board.h"      // soui_board_present_count() for the fps readout
-#include "soui_res_table.h"
+#include "soui_board.h"      // soui_board_frame_count() for the fps readout
 
 #include <esp_timer.h>
 
@@ -39,7 +37,7 @@ static const UINT_PTR kFpsTimerId = 1;
 static const UINT kFpsTimerMs = 500;
 
 CMainDlg::CMainDlg()
-    : SHostWnd(soui_demo_res::kLayoutMain)
+    : SHostWnd(UIRES.LAYOUT.XML_MAINWND)
     , m_bShowSvg(FALSE)
     , m_pMove(NULL)
     , m_pFade(NULL)
