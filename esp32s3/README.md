@@ -56,8 +56,10 @@ esp32s3/
 │   ├── soui_board.h/.cpp       RGB565 转换 + present 回调 + 触摸注入
 │   └── soui_board_esp32.cpp    ILI9341V / FT6X36 驱动（强实现）
 └── tools/
-    ├── idf_env.sh              手工装配 IDF 环境（绕开 export.sh 的 MSys 检查）
-    └── serial_capture.py       复位 + 抓 N 秒串口日志（非交互）
+    ├── esp-idf-v5.4.1/        ESP-IDF v5.4.1 源码，须含子模块（本地下载，不入库）
+    ├── .espressif/            工具链 + python env（install 脚本装的，不入库）
+    ├── idf_env.sh             手工装配 IDF 环境（绕开 export.sh 的 MSys 检查）
+    └── serial_capture.py      复位 + 抓 N 秒串口日志（非交互）
 ```
 
 **资源不是 C 数组**：`uires/` 下的原始文件由 `uiresbuilder` 生成 `.rc2`，
@@ -75,8 +77,57 @@ SOUI 桌面版同一条 `SResProviderPE` / `FindResource` 路径（见第 4.1 �
 
 ## 3. 环境
 
-- ESP-IDF **v5.4.1**，装在本机 `D:\work\xiaozi\...\esp-idf-v5.4.1`
-- 工具链 Xtensa GCC 14.2.0、CMake 3.30.2、Ninja 1.12.1
+| 项目 | 版本 | 位置 |
+|---|---|---|
+| ESP-IDF | v5.4.1（须含子模块） | `tools/esp-idf-v5.4.1/` |
+| 工具链 | Xtensa GCC 14.2.0_20241119 | `tools/.espressif/tools/xtensa-esp-elf/` |
+| CMake / Ninja | 3.30.2 / 1.12.1 | `tools/.espressif/tools/{cmake,ninja}/` |
+| Python | 3.13（venv `idf5.4_py3.13_env`） | `tools/.espressif/python_env/` |
+| openocd / esp-rom-elfs | v0.12.0-esp32-20241016 / 20241011 | `tools/.espressif/tools/` |
+
+两个目录都不入库（`esp32s3/.gitignore` 里的 `tools/esp-idf*/`、`tools/.espressif/`）。
+`tools/idf_env.sh` 用 `$BASH_SOURCE` 定位它们，**不写死任何绝对路径**，所以在
+`esp32s3/`、仓库根、`build/` 里调用都等价。要放到别处就设环境变量覆盖：
+`IDF_ROOT`（含 `esp-idf-v5.4.1/` 的目录）、`IDF_TOOLS_DIR`（含 `tools/`、
+`python_env/` 的目录）。
+
+### 3.1 这些工具从哪里来
+
+两步，装完就是上表的样子。体积：IDF 源码 640 MB，工具链目录本机是 5.1 GB
+（`install.bat esp32s3` 单目标约 1.5 GB，多出来的 `riscv32-esp-elf` 等是给
+esp32c/p 系列的，本工程用不到）。
+
+**① ESP-IDF v5.4.1 源码 —— 必须带子模块**
+
+```bash
+cd esp32s3/tools
+git clone -b v5.4.1 --recursive https://github.com/espressif/esp-idf.git esp-idf-v5.4.1
+```
+
+**② 工具链 + Python 环境 —— 用 IDF 自带的 install 脚本**
+
+```bash
+cd esp32s3/tools
+# Windows cmd
+IDF_TOOLS_PATH=%CD%\.espressif esp-idf-v5.4.1\install.bat esp32s3
+# Git Bash / Linux / macOS
+IDF_TOOLS_PATH="$PWD/.espressif" ./esp-idf-v5.4.1/install.sh esp32s3
+```
+
+**`IDF_TOOLS_PATH` 必须指向 `tools/.espressif`**：不设就会装到默认的
+`~/.espressif`，`idf_env.sh` 到时候报 `ESP-IDF tools not found`。这一步会下
+xtensa-esp-elf、cmake、ninja、esp-rom-elfs、openocd-esp32、python venv
+（esp32s3 单目标解压后约 1.5 GB）。各工具版本由
+`esp-idf-v5.4.1/tools/tools.json` 锁定，不要手工换。
+
+国内网络建议先挂 Espressif 的镜像（`idf_tools.py` 会用 `IDF_GITHUB_ASSETS`
+替换 github.com 的下载地址）：
+
+```bash
+export IDF_GITHUB_ASSETS=dl.espressif.cn/github_assets
+```
+
+另外 `windres` 不在 IDF 里，编资源要用宿主 mingw 的一份，见 4.1。
 
 **官方的 `export.sh` / `export.ps1` 在这台机器上两个都用不了**，所以自备了
 `tools/idf_env.sh`（第 4 节）。两个坑：
@@ -99,6 +150,17 @@ export OPENOCD_SCRIPTS=...
 `error: rebuilding 'build.ninja': subcommand failed`，真正的报错藏在上一行
 `file must be called with exactly three arguments`（`gdbinit.cmake:40`，参数传个
 空值就成了 2 个参数）。
+
+**IDF 目录换过位置（或从别处拷来的 `build/`）之后，第一次编译要清 bootloader**：
+
+```bash
+rm -rf build/bootloader && mkdir -p build/bootloader
+rm -f build/bootloader-prefix/src/bootloader-stamp/bootloader-{configure,done}
+```
+
+顶层 `build/CMakeCache.txt` 里存的是主工程，`build/bootloader/` 是 ExternalProject
+拉起来的**第二份独立配置**，两者不共享缓存。只清顶层的话主工程编得过，一到
+bootloader 就 `does not match the source ... used to generate cache`（见坑 25）。
 
 ## 4. 构建
 
@@ -307,6 +369,7 @@ I (13199) soui_app: fps=27.0, paint=33.8ms, flush=2.1ms | presents=281 (+94/3s, 
 | 22 | 组件 `CMakeLists` 里写 `-O2` 却不生效 | `target_compile_options` 排在 `CMAKE_CXX_FLAGS` **之后**，组件里原有的 `-Os` 会**静默覆盖** `CONFIG_COMPILER_OPTIMIZATION_PERF` 给的 `-O2`。改 `sdkconfig` 的优化等级对这几个组件完全无效 |
 | 23 | `idf.py build` 立刻返回、日志只有一行 `FAILED:` | `idf.py` 自己带 MSYS 检查，`MSYS_NO_PATHCONV` / 清 `MSYSTEM` 都绕不过 → 它打一行警告就 **`exit 0` 空转**。不是"吞掉错误"，是根本没执行。改用 `ninja -C build` |
 | 24 | 改任何 `CMakeLists.txt` 后 `ninja: error: rebuilding 'build.ninja': subcommand failed` | 真正的报错在上一行：`tools/cmake/gdbinit.cmake:40` 的 `file(TO_CMAKE_PATH $ENV{ESP_ROM_ELF_DIR} ...)` 因变量为空退化成 2 个参数 → `export ESP_ROM_ELF_DIR=<idf_tools>/tools/esp-rom-elfs/<ver>/` |
+| 25 | 换了 IDF 目录（`idf_env.sh` 的 `IDF_ROOT`）后，主工程能编，到 bootloader 就报 `CMake Error: The source ".../tools/esp-idf-v5.4.1/components/bootloader/subproject/CMakeLists.txt" does not match the source ".../old/esp-idf-v5.4.1/..." used to generate cache` | **`build/bootloader/` 是独立的外部工程，有两份自己的 `CMakeCache.txt`**，删顶层 `build/CMakeCache.txt` 不会碰到它。修法：`rm -rf build/bootloader && mkdir -p build/bootloader && rm -f build/bootloader-prefix/src/bootloader-stamp/bootloader-{configure,done}`。注意**目录必须自己建回来**——`bootloader-mkdir` 的 stamp 还在，ninja 认为已经建过，而 `cmd /C "cd /D ...\build\bootloader"` 对不存在的目录直接报"系统找不到指定的路径" |
 
 其他非报错但要记住的点：
 

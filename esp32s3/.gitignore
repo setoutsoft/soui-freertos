@@ -17,5 +17,9 @@ cap*.txt
 *.map
 *.zip
 
+# ---- 本地 ESP-IDF 源码与工具链（见 README 第 3 节，各自 640MB / 1.5GB，不入库）----
+tools/esp-idf*/
+tools/.espressif/
+
 # ---- IDF 本地配置备份 ----
 sdkconfig.old
