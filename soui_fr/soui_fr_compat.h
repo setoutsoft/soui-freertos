@@ -16,6 +16,7 @@
 #ifndef SWINX_FR_SOUI_COMPAT_H_
 #define SWINX_FR_SOUI_COMPAT_H_
 
+#include <climits> // souicoll.h uses LLONG_MIN / ULLONG_MAX without including it
 #include <swinx_stl.h>
 
 #endif // SWINX_FR_SOUI_COMPAT_H_

@@ -241,36 +241,37 @@ python tools/serial_capture.py COM4 22
 ## 6. 实测启动日志
 
 ```
-I (1363) soui_app: == SOUI4 on ESP32-S3 (soui_sim demo) ==
-I (1810) soui_app: Render_Gdi_SCreateInstance -> 1, obj=0x3fc9f3dc
-I (1816) soui_app: imgdecoder-stb installed
-I (1845) soui_app: SApplication created
-I (1845) soui_app: resource blob: 81298 bytes at 0x3c39f6f8
-... coffparser,2,parse done, found 56 resources ...
-I (2094) soui_app: system res flags=0x08 (bit0-2 = skin/editmenu/msgbox failed, bit3 = theme ok)
-I (2110) soui_app: app res provider added (UIDEF:XML_INIT)
-I (2110) soui_app: named ids registered: 13
-I (4401) soui_app: main window up, hwnd=0x3c479e44
-I (4402) soui_app: IMessageLoop=0x3fcbe714
-I (7475) soui_app: fps=20.0, paint=44.7ms, flush=0.9ms | presents=258 (+258/3s, 4.30/frame), pixels=493728 (+493728/3s), 165 kpix/s
-I (10646) soui_app: fps=21.7, paint=42.3ms, flush=0.4ms | presents=534 (+276/3s, 4.25/frame), pixels=696480 (+202752/3s), 68 kpix/s
+I (1364) soui_app: == SOUI4 on ESP32-S3 (soui_sim demo) ==
+tid=1070289748, ... coffparser,2,parse done, found 56 resources, coffparser.cpp:236
+I (2095) soui_app: app ready: render-gdi + imgdecoder-stb + PE resources
+I (2095) soui_app: resource blob: 81346 bytes at 0x3c39f87c
+I (2096) soui_app: named ids registered: 13
+I (3993) soui_app: main window up, hwnd=0x3c479e3c
+I (3993) soui_app: IMessageLoop=0x3fcbe3d0
+I (7055) soui_app: fps=25.7, paint=35.0ms, flush=2.9ms | presents=91 (+91/3s, 1.18/frame), pixels=565005 (+565005/3s), 188 kpix/s
+I (10069) soui_app: fps=27.0, paint=32.3ms, flush=2.1ms | presents=187 (+96/3s, 1.19/frame), pixels=998088 (+433083/3s), 144 kpix/s
+I (13199) soui_app: fps=27.0, paint=33.8ms, flush=2.1ms | presents=281 (+94/3s, 1.16/frame), pixels=1432518 (+434430/3s), 145 kpix/s
 ```
 
 六点值得注意：
 
-- `resource blob: 81298 bytes at 0x3c39f6f8` + `found 56 resources`：windres
+- `resource blob: 81346 bytes at 0x3c39f87c` + `found 56 resources`：windres
   COFF 已经进了 DROM 映射区并被 `WindResResourceParser` 解析成功（9 条 app +
   47 条系统皮肤），见 4.1。这两个值是判断"资源到底挂上没有"最快的依据。
-- `system res flags=0x08`：`LoadSystemNamedResource()` 的位掩码是**混合语义**——
-  0-2 位表示皮肤/editmenu/msgbox **失败**，第 3 位却在主题色**成功**时置位
-  （`SApp.cpp:701`）。所以 0x08 = 皮肤和主题色都正常。
+- `app ready: render-gdi + imgdecoder-stb + PE resources` 是 `SAppCfg::DoConfig()`
+  返回 TRUE 之后打的一行汇总：render 工厂、图片解码器、两套 PE 资源都在。
+  （旧的手写装配会分别打 `Render_Gdi_SCreateInstance -> 1` /
+  `imgdecoder-stb installed` / `system res flags=0x08` /
+  `app res provider added (UIDEF:XML_INIT)` 四行；改用 SAppCfg 后这些中间步骤
+  的日志随之一并消失，`LoadSystemNamedResource()` 的 bitmask 也不再对外暴露。）
 - `named ids registered: 13`：来自 `uiresbuilder` 生成的 `R.name` / `R.id`，
   布局里 13 个带 `name` 的控件都能用 `EVENT_ID_COMMAND(R.id.xxx, ...)` 找到。
 - `I (1326) spi_flash: flash io: qio`：QIO 真的生效了（镜像头里的 `dio` 是烧录模式，
   见 10.1）。
 - `fps=` 就是帧率，直接由**完成的 `WM_PAINT` 次数**算出来，和屏上 `fps_label`
-  是同一个口径。`presents` 是**blit 次数**，随重叠窗口数变（历史上 1.8~2 次/帧，
-  现在 4.3 次/帧），不能当帧率读（见 10.1）。
+  是同一个口径。`presents` 是**blit 次数**，随重叠窗口数变（历史上 4.3 次/帧，
+  现在 1.1~1.2 次/帧——`CreateRenderTarget2` 改成直接画进窗口 DC 之后，一帧只
+  提交一次），不能当帧率读。
 - `paint=42ms` + `flush=0.4ms`：**paint 是绝对瓶颈，SPI 送屏只占约 1%**。
   最初 paint 是 133ms——说明"刷屏慢"的直觉是错的，时间全花在 CPU 侧的裁剪/
   绘制调度上（见 10.1、10.2）。这组数字是**两个动画**（扫动 + alpha）的场景；
@@ -302,7 +303,7 @@ I (10646) soui_app: fps=21.7, paint=42.3ms, flush=0.4ms | presents=534 (+276/3s,
 | 18 | CPU 160→240MHz + 全局 `-O2` 只提升约 20% | 当时误判为"瓶颈是 PSRAM 访存、加时钟没用"。**这个结论后来被推翻**，见第 10.1 节：真正的瓶颈是每帧几十次 cairo 裁剪状态操作（固定开销，与像素数无关） |
 | 19 | 加了 `[prof]` 才发现 `updRgn=6073px` 但 `dirty=76800px` | `BeginPaint` 没按 Win32 语义把 DC 裁到 update region，`GetClipBox()` 报整窗 → `SHostWnd::OnPrint()` 把 `rcInvalid` 并成整窗 → present 变成整幅 BitBlt（15.7ms/帧） |
 | 20 | 40×16 的空窗口 `fade_box` 单独要 16ms | `DispatchPaint()` 每层无条件 2×`SaveClip` + 2×`PushClip`，每次都是一整套 `cairo_copy_clip_rectangle_list` + `CombineRgn` + `cairo_reset_clip` + `cairo_clip`；再加上 `IsClipClient()` 时 `rcClient==rcWnd` 也照样 `PushClipRect`（恒等裁剪）。修法见第 10.1 节 |
-| 21 | 有动画的窗口 paint 时间是静止窗口的数倍 | `SWindow::IsDrawToCache()` 里 `m_isAnimating \|\| !m_pAnimatorHandler->IsEmpty()` 让**任何带动画的窗口**都走整窗离屏表面。桌面在显存里做划算，PSRAM 上是纯亏 → `SOUI_DISABLE_AUTO_CACHE` 编译开关 |
+| 21 | 有动画的窗口 paint 时间是静止窗口的数倍 | `SWindow::IsDrawToCache()` = `m_bCacheDraw \|\| m_isAnimating \|\| !m_pAnimatorHandler->IsEmpty()`（`SOUI/src/core/Swnd.cpp:3985`），**任何带动画的窗口**都走整窗离屏表面。桌面在显存里做划算，PSRAM 上是纯亏。框架层没有关闭这个行为的开关，只能让该窗口自己不进入动画、也不显式写 `cache="1"`；本移植的解在资源层：根窗口 `cache="0"`（坑 16） |
 | 22 | 组件 `CMakeLists` 里写 `-O2` 却不生效 | `target_compile_options` 排在 `CMAKE_CXX_FLAGS` **之后**，组件里原有的 `-Os` 会**静默覆盖** `CONFIG_COMPILER_OPTIMIZATION_PERF` 给的 `-O2`。改 `sdkconfig` 的优化等级对这几个组件完全无效 |
 | 23 | `idf.py build` 立刻返回、日志只有一行 `FAILED:` | `idf.py` 自己带 MSYS 检查，`MSYS_NO_PATHCONV` / 清 `MSYSTEM` 都绕不过 → 它打一行警告就 **`exit 0` 空转**。不是"吞掉错误"，是根本没执行。改用 `ninja -C build` |
 | 24 | 改任何 `CMakeLists.txt` 后 `ninja: error: rebuilding 'build.ninja': subcommand failed` | 真正的报错在上一行：`tools/cmake/gdbinit.cmake:40` 的 `file(TO_CMAKE_PATH $ENV{ESP_ROM_ELF_DIR} ...)` 因变量为空退化成 2 个参数 → `export ESP_ROM_ELF_DIR=<idf_tools>/tools/esp-rom-elfs/<ver>/` |
@@ -325,13 +326,28 @@ I (10646) soui_app: fps=21.7, paint=42.3ms, flush=0.4ms | presents=534 (+276/3s,
 
 | 桌面/模拟器 | 这块板子 |
 |---|---|
-| `SAppCfg::DoConfig()`（头文件实现，内部 `CreateImgDecoder` 走 dlopen） | 手写装配：render 工厂 → `Decoder_Stb_SCreateInstance` → `SetImgDecoderFactory` → `SApplication` → 两个 `RES_PE` provider（`LoadSystemNamedResource` / `AddResProvider(app, "UIDEF:XML_INIT")`）→ `InitXmlNamedID` |
+| `SAppCfg::DoConfig()`（头文件实现，内部 `CreateImgDecoder` 走 dlopen） | 同一个 `SAppCfg::DoConfig()`，只有资源描述不同：`SetSysResPeHandle(kAppInstance)` / `SetAppResPeHandle(kAppInstance)` 指向 windres 编进镜像的 PE blob（见 4.1）；`InitXmlNamedID` 仍在 DoConfig 之后手动调用 |
 | uires → windres → `.section .rdata` | 同一条路，只是 COFF 用 `.incbin` 落到 `.rodata.embedded`，运行时 `SResProviderPE` 读（见 4.1）。**不再生成 C 数组** |
 | `uiresbuilder` 的 `R.id.*` | 同一个 `uiresbuilder` 生成的 `soui_res/resource.h`，`R.id.*` / `R.ID.*` / `R.name` 直接用 |
 | 系统资源 `soui_sys_res/theme_sys_res`（PNG 版） | 用 **SVG 版**（`soui-sys-resource-light/theme_sys_res`，内容与 `demos/android-demo/.../theme_sys_res` 只差一行 `_skin.sys.selband`）：render-gdi/cairo 走 nanosvg，不依赖位图解码 |
 | `main()` + `vTaskStartScheduler()` | `app_main()` + `xTaskCreatePinnedToCore(49152B, prio 5, core 1)` |
 | SDL 事件泵 + `SimHalRenderIfDirty` | `soui_board_poll_touch()` + `swinxFbPresent` 回调 |
 | `PeekMessage` + `IMessageLoop::OnMsg` | 同左，但每轮限 8 条消息 / 200ms（见坑 12） |
+
+`SAppCfg` 只有**一处**和桌面 demo 不同：本固件是静态链接的，`SComMgr2` 走
+`config.h` 里的 `LIB_SOUI_COM` 分支，而 `commgr2.h` 会按 `SCOM_MASK` 把每个
+"启用"组件的 `SCreateInstance()` 调用**编进代码**。默认值是
+`scom_mask_scom_all`，会把 render-skia / scriptmodule-lua / translator / log4z
+一起拉进来——这些库本固件没链接，于是变成链接错误（不是运行期失败）。所以
+`app_main.cpp` 在包含 `<SAppCfg.h>` **之前**必须先写：
+
+```cpp
+#include <commask.h>
+#define SCOM_MASK (scom_mask_render_gdi | scom_mask_imgdecoder_stb)
+```
+
+顺序不能反：`<souistd.h>` 等头一旦先把 `commgr2.h` 拉进来，`#ifndef SCOM_MASK`
+的默认值就定型了，之后再 define 只会得到一条重定义警告、mask 仍然全是 1。
 
 `<edit>` 也搬过来了：桌面靠 `CreateTextServices()`（`Msftedit.dll`，运行时
 dlopen），这里把 `third-part/richedit41` + 它的行服务库 `lssrc`（msls31 替代）
@@ -416,10 +432,18 @@ presents=146 (+48/3s), pixels=1198272 (+328104/3s), paint=116.0ms, flush=3.2ms, 
 
 | # | 瓶颈 | 现象 | 修法 | 收益 |
 |---|---|---|---|---|
-| 1 | `SWindow::IsDrawToCache()` 把"有动画"也算作要缓存 | 每帧 ClearRect 整窗 + 整窗重画进离屏 + 整幅 AlphaBlend，只为 6k 像素脏区 | 新增 `SOUI_DISABLE_AUTO_CACHE`：只有显式 `cache="1"` 才缓存（`Swnd.cpp`） | 162→133ms |
+| 1 | `SWindow::IsDrawToCache()` 把"有动画"也算作要缓存 | 每帧 ClearRect 整窗 + 整窗重画进离屏 + 整幅 AlphaBlend，只为 6k 像素脏区 | 用一个临时编译开关（让该函数只认 `m_bCacheDraw`）量出这一项，确认它是主因；**这个开关没有留在代码里**，最终的解落在资源层：根窗口 `cache="0"`（坑 16） | 162→133ms（临时开关）/ 162→126ms（`cache="0"`） |
 | 2 | `BeginPaint()` 没把 DC 裁剪到 update region | `GetClipBox()` 报整窗 → `SHostWnd::OnPrint()` 把 `rcInvalid` 并成整窗 → present 变成 307KB 整幅 BitBlt | `wnd.cpp` 的 `BeginPaint` 用 `wndObj->invalid.hRgn` 设 `RGN_AND` 裁剪（Win32 语义，`ReleaseDC` 的 `RestoreDC(-1)` 撤销） | present 15.7→1.2ms |
 | 3 | `DispatchPaint()` 对**每个**可见窗口**无条件**付 2 次 `SaveClip` + 2 次 `PushClip` | 一屏 25 个窗口就是上百次裁剪运算，而真正相交的只有 3 个 | ① 整窗不在脏区 → 函数开头直接 return；② 只在真有 `m_clipRgn/m_clipPath` 时 `SaveClip`；③ `rcClient == rcWnd` 时跳过 `PushClipRect` | 85→54ms，窗口 25→4 |
 | 4 | layered 窗口（alpha≠255，如 `fade_box`）每帧新建/释放离屏 RT | `CreateRenderTarget` + `cairo_create` + `Release` ≈ 6ms/帧，窗口只有 40×16 | 新增 `m_layeredRT` 成员跨帧复用，尺寸变化时在 `OnSize` 里丢弃重建 | 16.2→6.4ms |
+
+第 1 项之所以不在框架层留开关：`IsDrawToCache()` 现在（以及当时提交后）
+仍然是 `m_bCacheDraw || m_isAnimating || !m_pAnimatorHandler->IsEmpty()`
+（`SOUI/src/core/Swnd.cpp:3985`），改它会同时改变 Windows/移动端"动画窗口
+自带离屏缓冲"的行为。同一份收益用资源层就能拿到——让根窗口不写 `cache="1"`
+（坑 16，162→126ms），代价只有"根窗口每帧重画自己的背景"，而那点面积本来就
+落在脏区里。`components/soui/CMakeLists.txt` 里曾经的
+`SOUI_DISABLE_AUTO_CACHE` 宏从来没有对应的 `#ifdef` 分支，已删除。
 
 顺带把 `ExtSelectClipRgn(RGN_AND)` 改成快路径（`ApplyRegionAnd`）：cairo 的裁剪
 天生就是"与当前裁剪求交"，不需要先 `cairo_copy_clip_rectangle_list` 导出、再做
@@ -494,8 +518,8 @@ I (13586) presents=342 (+112/3s), pixels=2390648, paint=48.1ms, flush=3.2ms, 257
 **消融实验**，结论还差点把人带偏：
 
 - 把 RT 层的 `PushClipRect / PushClipRegion / PopClip / SaveClip / RestoreClip`
-  全部改成空实现（编译开关 `SOUI_ABLATE_CLIP`，见
-  `components/render-gdi/linux/render-gdi.cpp`），板子上的帧率**反而从 19fps
+  全部改成空实现（当时用一个临时编译开关做开关，量完即拆，代码里没有留下
+  `SOUI_ABLATE_CLIP` 这个名字），板子上的帧率**反而从 19fps
   掉到 14fps**。原因是那些空实现把裁剪一起删掉了，绘制不再被限制在 6k 像素的
   脏区里，填充面积成倍放大——**"删掉裁剪"和"裁剪很贵"两件事被混在一起了**。
 

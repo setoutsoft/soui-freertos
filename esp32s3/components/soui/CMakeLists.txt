@@ -269,24 +269,11 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     SOUI_PLATFORM_ESPIDF
     SOUI_ENABLE_SVG
     ENABLE_THUNK=0
-    # SWindow::IsDrawToCache() normally also returns true for any window that
-    # is animating, which routes every frame through a full-window offscreen
-    # surface (clear whole window + repaint whole window + AlphaBlend whole
-    # window) no matter how small the dirty rect is.  On this board that is the
-    # single largest frame cost; see the comment in SOUI/src/core/Swnd.cpp.
-    # PUBLIC because SWnd.h is also compiled from main/.
-    SOUI_DISABLE_AUTO_CACHE
     # Per-frame profiling: when 1, SHostWnd::OnPrint() and SWindow::DispatchPaint()
     # print a [prof] breakdown (layout / render phases / present / per-window
     # cost) to the console every 20 frames.  Keep it 0 for normal builds -- the
     # printf traffic alone costs ~1.5ms per frame at 115200 baud.
     SOUI_PORT_PROFILE=0
-    # ABLATION (measurement only): 1 = every render-target clip / SaveClip /
-    # RestoreClip becomes a no-op, so the difference in `paint` against a
-    # SOUI_ABLATE_CLIP=0 build is the cost of the clip machinery alone.  See
-    # the comment in components/render-gdi/linux/render-gdi.cpp.  MUST be 0
-    # for anything that ships.
-    SOUI_ABLATE_CLIP=0
     # swinx/src/uniconv.h: derive wchar_t size from the toolchain (4 on
     # Xtensa newlib), never from a hand-written constant.
     WCHAR_SIZE=__SIZEOF_WCHAR_T__

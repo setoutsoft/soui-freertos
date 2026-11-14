@@ -54,7 +54,7 @@
       Kept out of anim_box / fade_box's columns only so the demo reads clearly:
       the list opens downward over the button row and the description text.
     -->
-    <window name="cbx_field" pos="14,106,-14,130" skin="skin_field">
+    <window name="cbx_field" pos="14,106,-14,130" skin="skin_field" visible="1">
       <combobox name="cbx_speed" pos="0,0,-0,-0" dropDown="1" focusable="1" dropHeight="90" curSel="1"
                 animateTime="0" padding="6,0,0,0" drawFocusRect="0" font="adding:-1">
         <dropdownStyle>
@@ -86,12 +86,12 @@
       The 1px frame + white fill come from the wrapper (SRichEdit draws only the
       text), same trick as cbx_field above.
     -->
-    <window name="edt_field" pos="14,162,-14,186" skin="skin_field">
+    <window name="edt_field" pos="14,162,-14,186" skin="skin_field" visible="0">
       <edit name="edt_input" pos="4,0,-6,-0" font="adding:-1" colorBkgnd="@color/thm_color"
             cueText="@string/edt_cue" cueColor="@color/thm_txt_disabled"/>
     </window>
 
-    <text class="cls_txt_sub" text="@string/anim_label" pos="14,188,-14,202"/>
+    <text class="cls_txt_sub" text="@string/anim_label" pos="14,188,-14,202" visible="0"/>
 
     <!--
       Animation targets, driven by CMainDlg::onAnimationUpdate().
@@ -106,8 +106,8 @@
                    any translucent overlay, and it is the honest counterweight
                    to a pure position animation.
     -->
-    <window name="anim_box" pos="14,204,54,220" colorBkgnd="@color/orange"/>
-    <window name="fade_box" pos="14,224,54,240" colorBkgnd="@color/blue"/>
+    <window name="anim_box" pos="14,165,@80,@60" colorBkgnd="@color/orange"/>
+    <window name="fade_box" pos="14,224,54,240" colorBkgnd="@color/blue" visible="0"/>
 
     <!--
       Live frame-rate readout, updated by CMainDlg's 500ms timer from

@@ -1,4 +1,4 @@
-﻿//stamp:0775a5b1adc86991
+﻿//stamp:0775a93aad8ee2c5
 /*<------------------------------------------------------------------------------------------------->*/
 /*该文件由uiresbuilder生成，请不要手动修改*/
 /*<------------------------------------------------------------------------------------------------->*/
@@ -66,6 +66,7 @@ struct _R{
 		 const wchar_t * edt_field;
 		 const wchar_t * edt_input;
 		 const wchar_t * fade_box;
+		 const wchar_t * fps_label;
 		 const wchar_t * img_view;
 		 const wchar_t * txt_title;
 	}name;
@@ -80,6 +81,7 @@ struct _R{
 		int edt_field;
 		int edt_input;
 		int fade_box;
+		int fps_label;
 		int img_view;
 		int txt_title;
 	}id;
@@ -112,6 +114,7 @@ struct _R{
 			edt_field = 65544,
 			edt_input = 65545,
 			fade_box = 65547,
+			fps_label = 65548,
 			img_view = 65539,
 			txt_title = 65536
 		};
@@ -133,6 +136,7 @@ struct _R R={
 		L"edt_field",
 		L"edt_input",
 		L"fade_box",
+		L"fps_label",
 		L"img_view",
 		L"txt_title"
 	}
@@ -148,6 +152,7 @@ struct _R R={
 		65544,
 		65545,
 		65547,
+		65548,
 		65539,
 		65536
 	}

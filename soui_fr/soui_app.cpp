@@ -2,8 +2,9 @@
  * soui_fr/soui_app.cpp
  *
  * Real SOUI application smoke test on FreeRTOS:
- *   SRenderFactory_Gdi (render-gdi, cairo backend) + SApplication +
- *   in-memory ResProvider (embedded layout XML) + SHostWnd.
+ *   SApplication + SAppCfg (render-gdi/cairo + in-memory ResProvider +
+ *   SHostWnd), i.e. the same bring-up sequence a desktop SOUI app runs in
+ *   _tWinMain().
  *
  * The host window paints through SOUI's memory render target -> BitBlt to
  * the swinx window DC -> cairo -> software framebuffer, and the whole fb is
@@ -16,20 +17,22 @@
 #include <string.h>
 #include <thread> // resolves to the swinx FreeRTOS STL shim
 
-#include <interface/obj-ref-i.h>
-#include <interface/SResProvider-i.h>
+// Which statically linked components SAppCfg's SComMgr2 may name.  This MUST
+// come before the first SOUI header that reaches commgr2.h: it defaults
+// SCOM_MASK to "all components", and every enabled bit puts a call to e.g.
+// RENDER_SKIA::SCreateInstance() into the code.  This image links render-gdi
+// only -- there is no imgdecoder at all, hence ImgDecoder_None below.
+#include <commask.h>
+#define SCOM_MASK (scom_mask_render_gdi|scom_mask_imgdecoder_stb)
+
+#include <souistd.h>
+#include <SAppCfg.h> // SApplication + SAppCfg bring-up (wizard/CmakeApp flow)
+#include <core/SHostWnd.h>
 
 extern "C"
 {
 #include "uart.h"
 }
-
-#include <souistd.h>
-#include <SApp.h>
-#include <core/SHostWnd.h>
-
-// render-gdi factory (linux/cairo variant, statically linked)
-extern "C" BOOL Render_Gdi_SCreateInstance(IObjRef **ppRenderFactory);
 
 // in-memory resource provider (mem_res_provider.cpp)
 extern SNS::IResProvider *CreateMemResProvider(void);
@@ -176,29 +179,37 @@ static void app_task(void)
 {
     tprint("== SOUI SApp on FreeRTOS ==\n");
 
-    // 1. render factory (render-gdi / cairo)
-    //    IObjRef has no QueryInterface; SRenderFactory_Gdi is a single
-    //    TObjRefImpl<IRenderFactory> inheritance chain, so a static cast is
-    //    the identity conversion here.
-    IObjRef *pRenderFacObj = NULL;
-    BOOL bOk = Render_Gdi_SCreateInstance(&pRenderFacObj);
-    tprint("[app] render factory: ");
-    tprint_int(bOk);
-    tprint("\n");
-
-    SNS::IRenderFactory *pRenderFac = static_cast<SNS::IRenderFactory *>(pRenderFacObj);
-
-    // 2. SApplication (default system object register: windows/skins/layouts)
-    SNS::SApplication *theApp = new SNS::SApplication(pRenderFac, (HINSTANCE)1, _T("SOUI5HOST"));
-    tprint("[app] SApplication created\n");
-
-    // 3. in-memory res provider with the embedded layout XML
+    // 1. SApplication + SAppCfg
+    //    DoConfig() creates the render factory (render-gdi / cairo), wires the
+    //    image decoder and mounts the resource provider -- the same steps a
+    //    desktop app leaves to the wizard-generated _tWinMain().  Two things
+    //    are specific to this port:
+    //      * ImgDecoder_None: no imgdecoder-stb in this image, and the smoke
+    //        layout only uses colour fills and text,
+    //      * SetAppResMem(): resources are ROM tables behind MemResProvider
+    //        (no filesystem), so the provider is built here and handed over.
+    SNS::SApplication app((HINSTANCE)1);
     SNS::IResProvider *pRes = CreateMemResProvider();
     pRes->Init(0, 0);
-    theApp->AddResProvider(pRes, NULL);
-    tprint("[app] mem res provider added\n");
 
-    // 4. host window from the embedded layout
+    SNS::SAppCfg cfg;
+    cfg.SetRender(SNS::Render_Gdi)
+        .SetImgDecoder(SNS::ImgDecoder_Stb)
+        .SetAppResMem(pRes); // no uidef ini inside the mem provider
+    pRes->Release();               // SAppCfg holds its own reference now
+
+    BOOL bCfg = cfg.DoConfig(&app);
+    tprint("[app] SAppCfg::DoConfig=");
+    tprint_int(bCfg);
+    tprint("\n");
+    if (!bCfg)
+    {
+        tprint("[app] SAppCfg::DoConfig failed\n");
+        for (;;)
+            taskYIELD();
+    }
+
+    // 2. host window from the embedded layout
     tprint("[app] before SHostWnd ctor\n");
     SNS::SHostWnd hostWnd(_T("LAYOUT:APP_MAIN"));
     tprint("[app] before CreateEx\n");
@@ -215,7 +226,7 @@ static void app_task(void)
         tprint_int(bUpd);
         tprint("\n");
 
-        // 5. dump the framebuffer for visual inspection
+        // 3. dump the framebuffer for visual inspection
         int rc = dump_fb_ppm("soui_fb.ppm");
         tprint("[app] dump rc=");
         tprint_int(rc);
