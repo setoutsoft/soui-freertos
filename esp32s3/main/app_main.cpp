@@ -5,8 +5,10 @@
  *
  *   soui_sim/main.cpp                     this file
  *   ------------------------------------  ----------------------------------
- *   SAppCfg::DoConfig()                   explicit SApplication bring-up +
- *                                         LoadSystemNamedResource() + AddResProvider()
+ *   SimHalInit()                          soui_board_init()
+ *   SAppCfg::DoConfig() + InitXmlNamedID  identical -- render-gdi (cairo),
+ *                                         imgdecoder-stb, one windres PE blob
+ *                                         serving the system theme and the app
  *   xTaskCreate(..., 1<<19, ...)          xTaskCreatePinnedToCore(..., 49152)
  *   vTaskStartScheduler()                 supplied by IDF startup
  *   vTaskEndScheduler() / ExitThread()    never called (IDF has no shutdown)
@@ -37,11 +39,17 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 
-#include <interface/obj-ref-i.h>
-#include <interface/SResProvider-i.h>
+// Which statically linked components SAppCfg's SComMgr2 may name.  This MUST
+// be defined before <SAppCfg.h> is first seen: commgr2.h defaults SCOM_MASK to
+// "all components", and every enabled bit puts a call to e.g.
+// RENDER_SKIA::SCreateInstance() into the generated code.  render-skia /
+// scriptmodule-lua / translator / log4z are not part of this firmware, so the
+// default mask would fail at link time instead of at call time.
+#include <commask.h>
+#define SCOM_MASK (scom_mask_render_gdi | scom_mask_imgdecoder_stb)
+
 #include <souistd.h>
-#include <SApp.h>
-#include <SouiFactory.h> // SouiFactory::instance().CreateResProvider(RES_PE)
+#include <SAppCfg.h> // SApplication + SAppCfg bring-up (wizard/CmakeApp flow)
 #include <core/SHostWnd.h>
 
 #include "soui_board.h"
@@ -66,13 +74,6 @@
 extern "C" const unsigned char _binary_soui_coff_o_start[];
 extern "C" const unsigned char _binary_soui_coff_o_end[];
 
-
-// render-gdi (cairo variant) exports this from render-gdi.cpp.
-extern "C" BOOL Render_Gdi_SCreateInstance(IObjRef **ppRenderFactory);
-
-// imgdecoder-stb exports this from components/imgdecoder-stb/imgdecoder-stb.cpp.
-extern "C" BOOL Decoder_Stb_SCreateInstance(IObjRef **ppImgDecoderFactory);
-
 namespace
 {
 const char *kTag = "soui_app";
@@ -93,93 +94,52 @@ void soui_ui_task(void *)
 
     soui_board_init();
 
-    // 1. render factory (cairo-backed render-gdi, statically linked)
-    IObjRef *pRenderFacObj = NULL;
-    BOOL bOk = Render_Gdi_SCreateInstance(&pRenderFacObj);
-    ESP_LOGI(kTag, "Render_Gdi_SCreateInstance -> %d, obj=%p",
-             (int)bOk, (void *)pRenderFacObj);
-    if (!bOk || !pRenderFacObj)
+    // 1. SApplication + SAppCfg -- the wizard/CmakeApp bring-up, unchanged.
+    //
+    //    DoConfig() does what the previous hand-written sequence did, in the
+    //    same order:
+    //      * creates the render factory          (Render_Gdi -> render-gdi/cairo,
+    //                                             statically linked),
+    //      * creates and installs the image      (ImgDecoder_Stb ->
+    //        decoder into that factory            imgdecoder-stb; PNG skins and
+    //                                             <img> need it, SVG does not),
+    //      * loads the system theme              (SYS_XML_SKIN, THEME_COLOR,
+    //                                             sys editmenu/msgbox), asserting
+    //                                             that the resources were found,
+    //      * registers the app resource provider with the uidef id
+    //        "uidef:xml_init", which parses uidef/init.xml -> values:strings /
+    //        values:skin / values:color.
+    //
+    //    Both descriptors are set: the resource database carries the app uires
+    //    and the SOUI system theme side by side, exactly like a PE build, so
+    //    the same blob handle serves both providers.
+    SNS::SApplication app(kAppInstance);
+    SNS::SAppCfg cfg;
+    cfg.SetRender(SNS::Render_Gdi)          // render-gdi (cairo), linked statically
+        .SetImgDecoder(SNS::ImgDecoder_Stb) // imgdecoder-stb, also static
+        .SetSysResPeHandle(kAppInstance)    // system theme from the blob
+        .SetAppResPeHandle(kAppInstance);   // app uires from the same blob
+    if (!cfg.DoConfig(&app))
     {
-        ESP_LOGE(kTag, "render factory unavailable, aborting UI task");
+        ESP_LOGE(kTag, "SAppCfg::DoConfig failed, aborting UI task");
         vTaskDelete(NULL);
         return;
     }
-    // IObjRef has no QueryInterface; SRenderFactory_Gdi is a single
-    // TObjRefImpl<IRenderFactory> chain, so this static_cast is identity.
-    SNS::IRenderFactory *pRenderFac =
-        static_cast<SNS::IRenderFactory *>(pRenderFacObj);
-
-    // 1b. image decoder.  <img>, PNG skins and SImageWnd::SetImage() resolve
-    //     through IRenderFactory::GetImgDecoder(); with no factory installed
-    //     every LoadImage() returns NULL and SResProviderMgr logs
-    //     "resource content not found".  SAppCfg.h:476 does this on desktop.
-    IObjRef *pDecObj = NULL;
-    if (Decoder_Stb_SCreateInstance(&pDecObj) && pDecObj)
-    {
-        pRenderFac->SetImgDecoderFactory(
-            static_cast<SNS::IImgDecoderFactory *>(pDecObj));
-        ESP_LOGI(kTag, "imgdecoder-stb installed");
-    }
-    else
-    {
-        ESP_LOGW(kTag, "imgdecoder-stb missing: PNG stays blank, SVG still works");
-    }
-
-    // 2. SApplication (registers windows / skins / layouts)
-    SNS::SApplication *theApp =
-        new SNS::SApplication(pRenderFac, kAppInstance, _T("SOUI5HOST"));
-    ESP_LOGI(kTag, "SApplication created");
-
-    // 3. resources.  Both providers read the same windres blob -- the resource
-    //    database carries the app uires and the SOUI system theme side by side,
-    //    exactly like a PE build.  SResProviderPE::Init(wParam=HMODULE, 0)
-    //    stores the handle and resolves FindResource through swinx's
-    //    WindResResourceParser.
+    ESP_LOGI(kTag, "app ready: render-gdi + imgdecoder-stb + PE resources");
     ESP_LOGI(kTag, "resource blob: %u bytes at %p",
              (unsigned)(_binary_soui_coff_o_end - _binary_soui_coff_o_start),
              (const void *)_binary_soui_coff_o_start);
 
-    // 3a. system resources: _skin.sys.* skins, theme colours, msgbox/editmenu.
-    //     LoadSystemNamedResource() is a bitmask: bits 0-2 are set when skins /
-    //     editmenu / msgbox FAILED, bit 3 is set when the theme colours loaded
-    //     (that one is inverted in SApp.cpp:701).  0x08 therefore means "skins,
-    //     editmenu and msgbox all fine, theme colours loaded".
-    SNS::IResProvider *pSysRes =
-        SNS::SouiFactory::instance().CreateResProvider(SNS::RES_PE);
-    UINT uSysFail = 0xFFFF;
-    if (pSysRes)
-    {
-        pSysRes->Init((WPARAM)kAppInstance, 0);
-        uSysFail = theApp->LoadSystemNamedResource(pSysRes);
-        pSysRes->Release();
-    }
-    ESP_LOGI(kTag, "system res flags=0x%02x (bit0-2 = skin/editmenu/msgbox failed, bit3 = theme ok)",
-             uSysFail);
-
-    // 3b. application resources; "UIDEF:XML_INIT" parses uidef/init.xml, which
-    //     in turn pulls values:string / values:skin / values:color.
-    SNS::IResProvider *pAppRes =
-        SNS::SouiFactory::instance().CreateResProvider(SNS::RES_PE);
-    if (!pAppRes)
-    {
-        ESP_LOGE(kTag, "cannot create the PE resource provider, aborting UI task");
-        vTaskDelete(NULL);
-        return;
-    }
-    pAppRes->Init((WPARAM)kAppInstance, 0);
-    theApp->AddResProvider(pAppRes, _T("UIDEF:XML_INIT"));
-    pAppRes->Release();
-    ESP_LOGI(kTag, "app res provider added (UIDEF:XML_INIT)");
-
-    // 4. named ids so EVENT_ID_COMMAND(R.id.btn_test, ...) can be resolved from
+    // 2. named ids so EVENT_ID_COMMAND(R.id.btn_test, ...) can be resolved from
     //    the *names* in the layout XML.  R.name / R.id come from uiresbuilder's
     //    resource.h, same table a wizard app uses.
     const int nNamedIds = (int)(sizeof(R.id) / sizeof(int));
-    theApp->InitXmlNamedID((const LPCWSTR *)&R.name, (const int *)&R.id, nNamedIds);
+    app.InitXmlNamedID((const LPCWSTR *)&R.name, (const int *)&R.id, nNamedIds);
     ESP_LOGI(kTag, "named ids registered: %d", nNamedIds);
 
-    // 5. main window + first frame
-    HWND hWnd = soui_demo_create_window(theApp);
+    // 3. main window + first frame (WM_INITDIALOG -> images + animators, then a
+    //    synchronous WM_PAINT -> framebuffer -> SPI present).
+    HWND hWnd = soui_demo_create_window(&app);
     if (!hWnd)
     {
         ESP_LOGE(kTag, "main window creation failed");
@@ -188,7 +148,7 @@ void soui_ui_task(void *)
     }
     ESP_LOGI(kTag, "main window up, hwnd=%p", (void *)hWnd);
 
-    // 6. non-blocking message pump (a blocking GetMessage() would starve the
+    // 4. non-blocking message pump (a blocking GetMessage() would starve the
     //    board/touch polling and IDF's idle task on this core).
     //
     // Pump budget -- why it exists:
@@ -210,7 +170,7 @@ void soui_ui_task(void *)
     const int kMaxMsgsPerRound = 8;
     const TickType_t kMaxTicksPerRound = pdMS_TO_TICKS(200);
 
-    SNS::IMessageLoop *pMsgLoop = theApp->GetMsgLoop();
+    SNS::IMessageLoop *pMsgLoop = app.GetMsgLoop();
     ESP_LOGI(kTag, "IMessageLoop=%p", (void *)pMsgLoop);
     MSG msg;
     uint32_t nLastPresent = 0;
