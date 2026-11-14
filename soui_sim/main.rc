@@ -11,3 +11,16 @@
 // standard SResProviderPE path -- nothing is loaded from disk.
 #include "soui_res.rc2"       // app resources     (--include-dir <build>/soui_sim_res)
 #include "theme_sys_res.rc2"  // system resources  (--include-dir soui-sys-resource)
+
+// Test icon for the ICON: path -- <icon icon="APP_ICON:16"/> in dlg_main.xml.
+//
+// A string name (not a numeric ID) on purpose: SIconWnd hands the name from the
+// XML straight to LoadImageA(hinst, name, IMAGE_ICON, ...), which asks the
+// resource tree for RT_GROUP_ICON "APP_ICON" and then for the RT_ICON the group
+// points at.  windres and LoadImageBuf are the only two pieces involved, so
+// this is the shortest possible check that the FreeRTOS port parses
+// GRPICONDIR/ICONDIR + a 32bpp DIB with alpha correctly.
+//
+// Frame #1 of the icon is 32x32, frame #2 is 16x16 (soui-freertos/res/app.ico,
+// regenerate with tools/mkicon.py).
+"APP_ICON" ICON "../res/app.ico"

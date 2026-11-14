@@ -257,15 +257,22 @@ target_include_directories(cairo_fr PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/gen)
 target_compile_options(cairo_fr PRIVATE -w)
 
-# gdi/cairo backend (without the fontconfig/freetype font stack) + the
-# FreeRTOS font bridge that completes the FontFallback.h surface
+# gdi/cairo backend (without the fontconfig/freetype font stack) + the baked
+# bitmap font and the FreeRTOS font bridge that completes the FontFallback.h
+# surface
 set(SWINX_GDI_SRCS
     ${SWINX_DIR}/src/gdi/cairo/gdi.cpp
     ${SWINX_DIR}/src/gdi/cairo/drawtext.cpp
     ${SWINX_DIR}/src/gdi/cairo/cairo_show_text2.cpp
     ${SWINX_DIR}/src/gdi/cairo/builtin_image.cpp
-    ${SWINX_DIR}/src/gdi/freertos/textbridge.cpp)
+    ${SWINX_DIR}/src/gdi/freertos/sfr_font.cpp
+    ${SWINX_DIR}/src/gdi/freertos/textbridge.cpp
+    # icon/cursor loader: LoadImageW/A, CreateIconFromResource(Ex),
+    # LookupIconIdFromDirectoryEx.  POSIX path, but its only non-portable part
+    # is mmap, which SWINX_NO_MMAP removes.
+    ${SWINX_DIR}/src/platform/posix/cursoricon.cpp)
 target_sources(swinx_core PRIVATE ${SWINX_GDI_SRCS})
+target_compile_definitions(swinx_core PRIVATE SWINX_NO_MMAP SWINX_OWN_USER32)
 
 # Reuse the cross toolchain (arm-none-eabi-gcc, -DSOUI_FREERTOS_REAL, cortex-m3).
 # Pass it on the command line: -DCMAKE_TOOLCHAIN_FILE=../demo/cmake/toolchain-arm-freertos.cmake

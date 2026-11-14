@@ -98,13 +98,20 @@ set(SWINX_PLATFORM_SRCS
     # (clipboard -> SConnection, IME/OLE/file inert).  Only this component
     # compiles it: on a host build the real user32/kernel32 must win.
     "${SWINX_DIR}/src/platform/freertos/win32_rich.cpp"
-    "${SWINX_DIR}/src/platform/freertos/winobjs.cpp")
+    "${SWINX_DIR}/src/platform/freertos/winobjs.cpp"
+    # The icon/cursor loader (Wine-derived .ico/.cur/.ani reader): LoadImageW/A,
+    # CreateIconFromResource(Ex), LookupIconIdFromDirectoryEx.  It is under
+    # platform/posix but only touches GDI, so the only port changes are
+    # SWINX_NO_MMAP (no mmap on bare metal; icons arrive through the resource
+    # blob) and SWINX_OWN_USER32 (see the definition below).
+    "${SWINX_DIR}/src/platform/posix/cursoricon.cpp")
 
 set(SWINX_GDI_SRCS
     "${SWINX_DIR}/src/gdi/cairo/gdi.cpp"
     "${SWINX_DIR}/src/gdi/cairo/drawtext.cpp"
     "${SWINX_DIR}/src/gdi/cairo/cairo_show_text2.cpp"
     "${SWINX_DIR}/src/gdi/cairo/builtin_image.cpp"
+    "${SWINX_DIR}/src/gdi/freertos/sfr_font.cpp"
     "${SWINX_DIR}/src/gdi/freertos/textbridge.cpp")
 
 # ---- utilities --------------------------------------------------------------
@@ -281,7 +288,12 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     # FreeRTOS "words". 16KB per swinx-created task is the default here.
     SWINX_FR_DEFAULT_STACK_WORDS=16384)
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
-    SOUI_EXPORTS)
+    SOUI_EXPORTS
+    # cursoricon.cpp (LoadImageW/A, CreateIconFromResource) is a POSIX-platform
+    # file reused as-is: it has no mmap on bare metal, and on a Windows-host
+    # build of this shim the local definitions must win over user32's imports.
+    SWINX_NO_MMAP
+    SWINX_OWN_USER32)
 
 target_compile_options(${COMPONENT_LIB} PRIVATE
     -w

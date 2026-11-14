@@ -28,6 +28,10 @@
     <!-- simulated title bar -->
     <caption pos="0,0,-0,28" font="adding:2" layout="hbox" gravity="center" padding_left="10">
       <img skin="app_logo" size="16,16"/>
+      <!-- ICON: resource (SIconWnd attribute is "src"): the icon is an
+           RT_GROUP_ICON built by windres from soui-freertos/res/app.ico, served
+           by LoadImageA -> CreateIconFromResource.  Same as soui_sim. -->
+      <icon name="ico_demo" src="APP_ICON:16" size="16,16" extend_left="4" tip="ICON: resource"/>
       <text name="txt_title" text="@string/title" extend_left="6" colorText="@color/thm_txt_normal"/>
       <window size="0,0" weight="1" visible="0"/>
       <imgbtn name="btn_min" skin="_skin.sys.btn.minimize" animate="1"/>

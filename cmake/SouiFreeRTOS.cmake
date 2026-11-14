@@ -107,7 +107,34 @@ endif()
 
 if(SOUI_FR_BARE_METAL)
     set(SOUI_FR_PORT_DIR "${SOUI_FR_FREERTOS_DIR}/portable/GCC/ARM_CM3")
-    set(SOUI_FR_STACK_WORDS 8192)
+    # 16384 words = 64KB (StackType_t is 4 bytes on Cortex-M).  FreeRTOS counts
+    # task stacks in words here, unlike ESP-IDF which counts bytes -- see
+    # esp32s3/components/soui/CMakeLists.txt, where the same macro carries a
+    # byte count.  This is why the two numbers look wildly different.
+    #
+    # 8192 words (32KB) used to be enough *only because no glyph ever reached
+    # the rasterizer*: with SwinXGetCachedFontFace() returning NULL the toy font
+    # failed with CAIRO_STATUS_FONT_TYPE and text drawing was a silent no-op, so
+    # a frame cost nothing more than a few solid fills.  Once the baked bitmap
+    # font made text actually draw (swinx/src/gdi/freertos/sfr_font.cpp), the
+    # same frame started going through the mask-compositing path, and the
+    # measured floor moved up:
+    #
+    #   10240 words (40KB) -> *** STACK OVERFLOW *** swinx-thr, right after
+    #                         "[app] SHostWnd CreateEx" (i.e. inside UpdateWindow)
+    #   12288 words (48KB) -> runs to "SOUISAPP FREERTOS DONE" + a 320x240 dump
+    #
+    # The stack is spent in cairo/pixman, not in the baked tables (those are
+    # static const).  Two frames dominate and they are both third-party
+    # constants rather than anything this port can trim:
+    #   * pixman-general.c general_composite_rect() puts
+    #     uint8_t stack_scanline_buffer[3 * 8192] = 24,576 B on the stack
+    #     (it only falls back to malloc for widths that do not fit);
+    #   * cairo-botor-scan-converter.c + cairo-spans-compositor.c add ~14KB
+    #     of trapezoid/span state on top of it.
+    # 64KB leaves ~30% headroom over the 48KB that already passes, and is the
+    # same order as the 48KB the ESP32-S3 build gives its UI task.
+    set(SOUI_FR_STACK_WORDS 16384)
 else()
     set(SOUI_FR_PORT_DIR "${SOUI_FR_FREERTOS_DIR}/portable/MSVC-MingW")
     set(SOUI_FR_STACK_WORDS 32768)
@@ -455,12 +482,23 @@ function(soui_fr_add_swinx)
 
     add_library(swinx_core STATIC
         ${SWINX_CORE_SRCS} ${SWINX_CMNCTL_SRCS} ${SOUI_FR_SWINX_PLATFORM_SRCS}
-        # gdi/cairo backend + the FreeRTOS font bridge
+        # gdi/cairo backend + the FreeRTOS font bridge (baked bitmap font)
         "${SWINX_DIR}/src/gdi/cairo/gdi.cpp"
         "${SWINX_DIR}/src/gdi/cairo/drawtext.cpp"
         "${SWINX_DIR}/src/gdi/cairo/cairo_show_text2.cpp"
         "${SWINX_DIR}/src/gdi/cairo/builtin_image.cpp"
-        "${SWINX_DIR}/src/gdi/freertos/textbridge.cpp")
+        "${SWINX_DIR}/src/gdi/freertos/sfr_font.cpp"
+        "${SWINX_DIR}/src/gdi/freertos/textbridge.cpp"
+        # The one POSIX platform file that is not about the OS: the Wine-derived
+        # .ico/.cur/.ani reader behind LoadImageW/A, CreateIconFromResource(Ex)
+        # and LookupIconIdFromDirectoryEx.  It only touches GDI (CreateBitmap,
+        # CreateDIBSection, CreateIconIndirect), all of which the cairo backend
+        # provides, so it ports as-is once mmap is out of the picture -- hence
+        # SWINX_NO_MMAP below (icons come from the resource blob, not a path).
+        # SWINX_OWN_USER32: a Windows-host build is _WIN32 but still runs this
+        # shim, so its LoadImageA must come from here and not user32.dll.
+        "${SWINX_DIR}/src/platform/posix/cursoricon.cpp")
+    target_compile_definitions(swinx_core PRIVATE SWINX_NO_MMAP SWINX_OWN_USER32)
     target_link_libraries(swinx_core PUBLIC soui_fr_platform soui_fr_thirdparty)
     # No extra "-include swinx_stl.h" here: soui_fr_compat.h (force-included by
     # soui_fr_platform) already pulls the STL shims in, and CMake *dedupes*

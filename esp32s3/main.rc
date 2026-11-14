@@ -20,3 +20,8 @@
 //   theme_sys_res/...    -> <soui4>/soui-sys-resource-light  (--include-dir)
 #include "soui_res.rc2"         // app resources      (--include-dir <project>/soui_res)
 #include "theme_sys_res.rc2"    // system resources   (--include-dir soui-sys-resource-light)
+
+// Test icon for the ICON: path -- <icon icon="APP_ICON:16"/> in dlg_main.xml.
+// Same string-named RT_GROUP_ICON/RT_ICON pair as soui_sim/main.rc; the file
+// itself lives at soui-freertos/res/app.ico so both demos embed one copy.
+"APP_ICON" ICON "../res/app.ico"

@@ -9,10 +9,10 @@ XML 布局、图片、值动画全部走 SOUI 自己的路径，没有任何 LVG
 
 | 指标 | 实测 |
 |---|---|
-| 固件 | `soui_esp32s3.bin` = 4,537,248 字节（6MB app 分区剩 28%） |
+| 固件 | `soui_esp32s3.bin` = 4,653,360 字节 / 0x46F930（6MB app 分区剩 26%；比只有 toy font 的版本多 ~105 KB：烘焙字模 82.5 KB + 图标读取器 15.5 KB + 内嵌图标 ~5.4 KB） |
 | 启动到首帧上屏 | 约 4.4 s（上电 → COFF 资源解析 → 布局 + SVG 皮肤 → cairo 首帧 + 整屏 SPI；其中 UI 任务内部约 3.0 s） |
 | 稳态刷新 | **20~22 fps**（`paint` 42~45 ms + `flush` <1.5 ms；两个动画：扫动 + alpha） |
-| 资源 | windres COFF 81,298 B / 56 条（app uires 9 + 系统主题 47），`SResProviderPE` 加载 |
+| 资源 | windres COFF 87,352 B / 59 条（app uires 9 + 系统主题 47 + 测试图标 3：`GRPICONDIR` 与两帧 `RT_ICON`），`SResProviderPE` 加载 |
 | 稳定性 | 连续运行无 panic、无 task_wdt |
 
 > 只想跑一遍"编译 → 烧录 → 看日志"的话，看 **[BUILD_FLASH.md](BUILD_FLASH.md)**，
@@ -241,8 +241,8 @@ flowchart LR
 |---|---|---|
 | `uires/` | 手工编辑 | 应用资源：`uires.idx` + XML / PNG / SVG。是 soui_sim 的副本，唯一差别是根窗口 `cache="0"`（见坑 16） |
 | `soui_res/*.rc2`、`resource.h` | `uiresbuilder.exe` | 前者列出 9 条 app 资源，后者给出 `UIRES.*` / `R.id.*` / `R.name` / `R.ID.*`（13 个命名 id）。**产物入库**，非 Windows 宿主直接复用 |
-| `main.rc` | 手工编辑 | 只做两件事：`#include "soui_res.rc2"` 和 `#include "theme_sys_res.rc2"`（后者来自 `soui-sys-resource-light`，47 条 SVG/PNG/XML 系统皮肤） |
-| PE-COFF | `windres --target=pe-x86-64 -O coff` | 一个装了 56 条资源的 COFF **对象文件**，81,298 B |
+| `main.rc` | 手工编辑 | 三件事：`#include "soui_res.rc2"`、`#include "theme_sys_res.rc2"`（后者来自 `soui-sys-resource-light`，47 条 SVG/PNG/XML 系统皮肤），以及一行 `"APP_ICON" ICON "../res/app.ico"`（标题栏 `<icon src="APP_ICON:16">` 用的 `RT_GROUP_ICON` + 两帧 `RT_ICON`） |
+| PE-COFF | `windres --target=pe-x86-64 -O coff` | 一个装了 59 条资源的 COFF **对象文件**，87,352 B |
 | `.rodata.embedded` | `xtensa-esp32s3-elf-gcc -c blob.S` | `.incbin` 把 COFF 当数据塞进镜像，导出 `_binary_soui_coff_o_start/_end` |
 | 运行时 | `swinx/src/resapi.cpp` | `LoadModuleResources()` 先试 `dlsym`，静态镜像回落到那两个弱符号，交给 `WindResResourceParser::Parse()`；`SResProviderPE` 通过 Win32 的 `FindResource`/`LoadResource`/`LockResource` 读字节 |
 
@@ -947,8 +947,16 @@ python -m esptool -p COM4 -b 921600 write_flash --flash_mode dio --flash_freq 80
   编译即可；但它仍编在 app 分区里，换皮肤必须整包重烧。要 OTA 换皮肤得改成
   独立分区 + 自定义 `IResProvider`。
 - `<edit>` 已可用（richedit41 静态链接），但**没有输入法**：板上没有键盘，
-  `WM_CHAR` 只能由 `SwinxInjectKey` 注入；IME 接口是惰性桩，中文输入需要
-  内嵌 TTF + FreeType + 一个软键盘控件。
-- 中文显示需要内嵌 TTF + FreeType：`textbridge.cpp` 目前只暴露 cairo 的 toy font
-  （ASCII 够用，demo 里全是英文）。
+  `WM_CHAR` 只能由 `SwinxInjectKey` 注入；IME 接口是惰性桩，中文输入还需要一个
+  软键盘控件。
+- 文本走**烘焙位图字体**，不再依赖 FreeType：`swinx/tools/bakefont` 把 Lato 烘成
+  12~16px × regular/bold 的 alpha 字模表（`sfr_font_data.h`，10 面共 67KB flash，
+  运行时编译后 82.5KB），用 `cairo_user_font_face` 接进 cairo。好处是 advance 为
+  整数、测宽与绘制天然一致（原来 cairo toy font 的分数 advance 被截断，行末字
+  会被裁掉）。**代价：只覆盖 ASCII 0x20-0x7E**，中文会显示成 `?`；要中文得用
+  `bakefont --chars` 烘所需码位（全字库不现实，按业务文案取子集），见
+  `swinx/tools/bakefont/README.md`。
+- `ICON:` 资源已可用（`cursoricon.cpp` 进构建，`LoadImageA` /
+  `CreateIconFromResource` 不再是 NULL 桩），标题栏的 `APP_ICON:16` 就是这条路；
+  限制是**不支持 PNG 压缩的 ICO 分帧**（测试图标用未压缩 32bpp DIB 分帧）。
 - 剪贴板只在本进程内有效（`SClipboard` 是内存表），没有系统剪贴板。

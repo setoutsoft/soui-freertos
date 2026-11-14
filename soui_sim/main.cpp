@@ -41,6 +41,11 @@ static void demo_SWinxLogCallback(const char *pLogStr, int level){
     SLOG("swinx",level)<<pLogStr;
 }
 
+// font_probe.cpp: measure-vs-draw self-test (SOUI_SIM_FONTPROBE=1)
+int SimFontProbe(void);
+// icon_probe.cpp: LoadImageA / CreateIconFromResource self-test (SOUI_SIM_ICONPROBE=1)
+int SimIconProbe(void);
+
 // =============================================================================
 // the application (what a Win32 build would put in _tWinMain)
 // =============================================================================
@@ -53,6 +58,15 @@ static int RunApp(void)
         return -1;
     }
     SetSwinxLogCallback(demo_SWinxLogCallback,0);
+
+    // Headless font self-test: pure swinx GDI, no SOUI window needed, so it
+    // runs before SApplication exists.  Exit code doubles as the CI result.
+    if (getenv("SOUI_SIM_FONTPROBE"))
+        return SimFontProbe() ? 1 : 0;
+    // Same idea for the icon path (LoadImageA / CreateIconFromResource), which
+    // needs the resource blob but no window either.
+    if (getenv("SOUI_SIM_ICONPROBE"))
+        return SimIconProbe() ? 1 : 0;
     // ---- 2. SApplication + SAppCfg ----------------------------------------
     // Same shape as wizard/CmakeApp/main.cpp: the config object creates the
     // render factory, registers the image decoder, loads the system resources

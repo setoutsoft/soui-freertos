@@ -85,10 +85,13 @@ soui_fr_link_app(app)                 # 等价于 target_link_libraries(app PRIV
 | `config/FreeRTOSConfig.h` | FreeRTOS 专有（栈、heap_3、hook 开关） |
 | `sim/soui_sim_hal.*` | 模拟器专有的宿主壳：SDL2 窗口 / ARGB 纹理 / 鼠标键盘注入 |
 
-两处当前仍与 wizard 不同（受平台层能力限制）：
+一处当前仍与 wizard 不同（受工具链限制）：
 
-- swinx freertos 的 `LoadImageW/A`、`CreateIconFromResource` 还是 NULL 桩，所以 `<icon src="ICON_LOGO">` / `bigIcon` 用不了 —— 标题栏 logo 改成 `<img skin="app_logo">`（PNG 皮肤）。
 - 该工具链不定义 `_UNICODE`（`TCHAR == char`），字符串字面量一律 `_T(...)`，`L"..."` 不能直接喂给 `LPCTSTR` 接口。
+
+`ICON:` 资源与字体度量都已补齐（`swinx/src/gdi/freertos/sfr_font.cpp`、
+`swinx/src/platform/posix/cursoricon.cpp`），标题栏现在同时有 PNG 皮肤 logo 和
+`<icon src="APP_ICON:16">`，详见下文"字体与图标"。
 
 ## 工作原理（soui_sim）
 
@@ -137,6 +140,93 @@ cmake -S <proj> -B <proj>/build -G Ninja && ninja -C <proj>/build
 
 `soui_sim/screenshots/` 存定妆图（如 `00_idle.png`）；需要更多证据用系统截图（Win+Shift+S）。
 
+## 字体与图标
+
+这两块是"能不能当 UI 用"的分水岭：文本以前会截尾，`ICON:` 以前是 NULL 桩。
+现在两条都通了，做法各只有一句话——**字体换成烘焙位图**，**图标复用 Wine 的
+`.ico` 读取器**。
+
+### 字体：烘焙位图 + cairo user font
+
+不用 FreeType 是算出来的账：链接 FreeType 要 ~300KB 代码，再加上字形缓存，
+在 320x240 上用 5 个字号换来的收益撑不起这份体积。
+
+- **字模数据**由宿主工具离线烘焙（`swinx/tools/bakefont/`，见该目录 README）：
+  Lato regular/bold × 12/13/14/15/16 px × ASCII 0x20-0x7E，每面 95 个字形，
+  8-bit alpha 位图 + **整数** advance，生成 `swinx/src/gdi/freertos/sfr_font_data.h`
+  并入库（target 构建既不依赖 FreeType 也不依赖 ttf 文件）。
+- **运行时**（`sfr_font.cpp`）把这张表包成 `cairo_user_font_face`：
+  `on_init` 给字体纵向度量、`on_render_glyph` 用 `cairo_mask_surface` 画 alpha
+  位图并返回度量、`on_unicode_to_glyph` 做码位→表索引。三个回调的返回值都是
+  **未缩放单位**（除以字号），cairo 再乘字体矩阵——这是 cairo 自己的 twin 字体
+  用的同一套约定。
+- **测宽与绘制共用一张表**，所以 `GetTextExtentPoint32A` 与
+  `cairo_show_text` 天然一致。原先的病根不只在字体：swinx 习惯把
+  `abs(lfHeight)` 当 cairo 的 em 尺寸，而 cairo toy font 的 advance 是分数，
+  `psizl->cx = ext.x_advance` 的截断让 SOUI 逐词累加的排版每段都少算一点，
+  行越排越宽、末尾被裁。现在 `src/gdi/cairo/gdi.cpp` 的
+  `GetTextExtentPoint32A` 改成四舍五入而不是截断。
+- **体积**：`sfr_font.cpp.obj` 的 `text` = 82.5KB（10 张字模表），`textbridge.cpp`
+  = 483B。作为对照，app 分区 6MB、当前 `.bin` 4.6MB。
+- **代价是任务栈**：文字从"空操作"变成"真的光栅化"之后，裸机一帧需要 ~44KB
+  栈（pixman + cairo 的固定开销，不是字模表）。`SOUI_FR_STACK_WORDS` 已从
+  8192 提到 16384（64KB），实测边界与原因见下文「裸机的任务栈」。
+- **换字号/换字体**：`bakefont` 重生成头文件即可，运行时按"最接近的烘焙字号"
+  取表，差值由 cairo 缩放，所以 17px 这类未烘焙尺寸也能出字（略有缩放模糊）。
+
+### 图标：`ICON:` 走 LoadImage + CreateIconFromResource
+
+`swinx/src/platform/posix/cursoricon.cpp`（Wine LGPL 派生，2023 行）就是完整
+的 `.ico/.cur/.ani` 读取器，它只碰 GDI（`CreateBitmap`/`CreateDIBSection`/
+`CreateIconIndirect`，cairo 后端全有），所以**直接编进 FreeRTOS 目标**，只加
+两个宏：
+
+| 宏 | 作用 |
+| --- | --- |
+| `SWINX_NO_MMAP` | 去掉 `<sys/mman.h>` 与文件映射路径（裸机没有 mmap，图标只从资源块来）；`LR_LOADFROMFILE` 因此不可用 |
+| `SWINX_OWN_USER32` | 宿主模拟器是 `_WIN32` 但在跑 swinx 垫片，`LoadImageA` 必须用本文件这份，不能落到 user32.dll 的同名导入（那份不认识内嵌 COFF 资源，一律返回 NULL） |
+
+`sysbridge.cpp` 里原来的 `LoadImageA` / `LoadImageBuf` / `LoadBitmapA` /
+`CreateIconFromResource` 四个 NULL 桩已删除。
+
+用法与 Windows 一致，注意 `SIconWnd` 的属性名是 **`src`**
+（`SOUI_ATTRS: ATTR_CUSTOM(L"src", OnAttrIcon)`）：
+
+```xml
+<icon name="ico_demo" src="APP_ICON:16" size="16,16"/>   <!-- name:size -->
+```
+
+`APP_ICON` 是 `main.rc` 里一行 windres 语句生成的 `RT_GROUP_ICON` + `RT_ICON`，
+图标文件是 `res/app.ico`（32x32 + 16x16，32bpp 带 alpha，`tools/mkicon.py` 可
+重新生成）。设备端与模拟器共用这一份。`cursoricon.cpp.obj` 的 `text` = 15.5KB。
+
+### 两个无头自检
+
+都只需一个环境变量，退出码即结果（0 = 通过），可在 CI 里当门禁用：
+
+```bash
+cd soui_sim/build
+
+# 字体：断言 measure == draw（整串 == 逐字累加 == 实际墨迹宽度）
+SOUI_SIM_FONTPROBE=1 SDL_VIDEODRIVER=dummy ./soui_sim.exe
+#   [probe] regular 15px asc=13 desc= 3 | whole 382 chars 382 ink 382 y  1.. 15 | PASS
+#   [probe] ALL PASS (0 failures)
+#   加 SOUI_SIM_FONTPROBE_DUMP=<dir> 会把每个字号的实测条带导出成 probe_<n>px_<i>.bmp
+
+# 图标：资源树 -> CreateIconFromResource -> LoadImageA -> DrawIconEx 全链
+SOUI_SIM_ICONPROBE=1 SDL_VIDEODRIVER=dummy ./soui_sim.exe
+#   [iconprobe] RT_GROUP_ICON "APP_ICON"          -> found (size 34)
+#   [iconprobe] LookupIconIdFromDirectoryEx(16,16) -> 2
+#   [iconprobe] CreateIconFromResource(#1,   4264 bytes) -> icon, drawn 824 px, bbox 0,0..31,31
+#   [iconprobe] LoadImageA(16px) -> icon 16x16 32bpp | drawn 232 px | PASS
+#   [iconprobe] ALL PASS (0 failures)
+```
+
+字体自检的判据是三条同时成立：`whole == chars`（没有逐段截断）、
+`ink <= whole + 1`（墨迹不会超出排版宽度）、`ink + 3 >= whole`（允许最后一个
+字形的右边距，不允许"少画一段"）。它跑在 `SApplication` 之前，所以是不依赖
+窗口的纯 GDI 检查；图标自检同理，只看资源块。
+
 ## 调试与排障
 
 - **无窗口 / 秒退（`0xc0000139`，进不了 `main()`）**：PATH 里另一套 MinGW（PortableGit / Android platform-tools / xampp）的 `libwinpthread-1.dll` / `zlib1.dll` / `libiconv-2.dll` 影子掉了 exe 旁边的同名 DLL。`SOUI_FR_USE_SYSTEM_DEPS=ON` 构建会自动把运行时 DLL 收拢到 exe 同级（exe 目录优先级最高），或把冲突目录从 PATH 移除。
@@ -164,6 +254,32 @@ qemu-system-arm -M mps2-an385 -kernel build/swinx_test.elf \
 完整构建 / 运行 / 排障（含 `soui_fr` 的 `-semihosting` 出图、`demo` 的小板、串口 stdio 背压假 hang、`-serial file:` 必须写 Windows 绝对路径）见《SOUI5-FreeRTOS 开发指南》。
 
 > 🚨 **FLASH 4MB 物理上限**：mps2-an385 的 ZBT SSRAM1 只有 4MB，text 越过 `0x00400000` 即与 RAM 物理重叠，复位即 HardFault。可运行镜像必须 `--gc-sections`（census 模式 `--whole-archive` 只链不跑，用于暴露符号缺口）。
+
+### 裸机的任务栈：一帧真的要 44KB
+
+`soui_fr` 的 app 任务过去给 8192 words（Cortex-M3 上一 word = 4B，即 32KB），
+在文字还是空操作的那个阶段完全够用——那时 `SwinXGetCachedFontFace()` 返回
+NULL，cairo toy font 以 `CAIRO_STATUS_FONT_TYPE` 失败，文本绘制是**静默 no-op**，
+一帧只剩下几个纯色填充，走 pixman 的 fast path。字模接上以后同一帧开始进
+mask 合成路径，栈下限立刻上移，实测边界（`SOUI_FR_STACK_WORDS`，字）：
+
+| 栈 | 结果 |
+| --- | --- |
+| 8192 / 10240（32KB / 40KB） | `*** STACK OVERFLOW *** swinx-thr`，紧随 `[app] SHostWnd CreateEx hwnd=…`——即死在 `UpdateWindow` 里 |
+| 12288（48KB） | 走到 `SOUISAPP FREERTOS DONE` 并 dump 出 320x240 的 PPM |
+| **16384（64KB，现默认）** | 同上，留 ~30% 余量 |
+
+这笔栈不在字模表里（那些是 `static const`），全花在 cairo/pixman 的固定开销上，
+两块都可从目标文件读出，不是估计：
+`pixman-general.c` 的 `general_composite_rect()` 光
+`uint8_t stack_scanline_buffer[3 * 8192]` 就是 24,576B（只有宽度放不下才转 malloc），
+`cairo-botor-scan-converter.c` + `cairo-spans-compositor.c` 再叠 ~14KB 的梯形/span 状态。
+所以这个数字**不是本移植层能裁的**，只能如实给够。参照：ESP32-S3 那份构建给 UI
+任务是 49152 字节，同一个数量级。
+
+两个平台的宏名字一样、单位不一样，是最容易踩的一脚：裸机是 **FreeRTOS word**，
+ESP-IDF 的 `xTaskCreate` 是 **byte**（见 `esp32s3/components/soui/CMakeLists.txt`
+里的 `SWINX_FR_DEFAULT_STACK_WORDS=16384` 与这里的 16384 words 差 4 倍）。
 
 ## 平台宏（swinx）
 
@@ -217,4 +333,13 @@ swinx 里判断"是不是 FreeRTOS 平台 / 有没有宿主 OS / 内核原语从
   各用一个开关、条件还不一致，属于同一判定的重复表达，已合并。定位手法：`gdb --pid` 附加后
   反汇编落点，看到 `jmp <自身>` 即可确认是宏循环而非锁竞争（锁竞争在 Win32 端口上是阻塞，
   CPU 不会满）。
-- **平台层两处与 wizard 的差异**（无 `ICON:` 桩接口、无 `_UNICODE`）见上文"soui_sim 的目录结构"。
+- **平台层与 wizard 的差异**（无 `_UNICODE`）见上文"soui_sim 的目录结构"；字体与
+  `ICON:` 已不再有差异，见"字体与图标"。
+- **烘焙字体只覆盖 ASCII 0x20-0x7E**：中文/其它脚本会统一显示成 `?`（
+  `on_unicode_to_glyph` 的缺字兜底）。要中文得改 `bakefont` 的码位范围（体积按
+  字形数线性涨，一个 16px 汉字的 alpha 位图约 150-300B，全字库不现实，按需取子集）。
+- **图标不支持 PNG 压缩的 ICO 分帧**：`SWINX_NO_LIBPNG` 之外的路由同样没有 png
+  解码；实机/模拟器的 `cursoricon.cpp` 是带 png 的（libpng 已链），但 PNG 分帧这条
+  分支在本端口未验证，测试图标故意用未压缩的 32bpp DIB 分帧。
+- **光标仍然不绘制**：`LoadCursor` 走 `CursorMgr`，帧缓冲路径没有指针图元；
+  `cursoricon.cpp` 只补了图标侧。`DestroyCursor` 仍是空实现。

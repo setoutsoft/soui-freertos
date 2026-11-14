@@ -397,7 +397,7 @@ ninja -C build && ./build/soui_sim.exe
 | `WCHAR_SIZE` | `__SIZEOF_WCHAR_T__` | MinGW `wchar_t`=2B；见 §6 |
 | `CAIRO_WIN32_STATIC_BUILD` | 所有含 cairo 头的 target（含 `cairo_fr` 自身） | 否则 vendored `cairo.h` 推 `__declspec(dllimport)` ⇒ `__imp_cairo_*` 全线未定义 |
 | `-Wl,--allow-multiple-definition` | 链接选项 | swinx 自带 WaitForSingleObject/Sleep/CreateEvent 等约 25 个 Win32 实现，与 libkernel32 冲突；swinx_core 链接序在前 ⇒ swinx 版胜出（与真机一致），SDL2 是 DLL 不受影响 |
-| `SWINX_FR_DEFAULT_STACK_WORDS` | 32768 | STL 垫片建任务的默认栈 |
+| `SWINX_FR_DEFAULT_STACK_WORDS` | 32768（宿主；裸机 16384 = 64 KB） | STL 垫片建任务的默认栈 |
 | fb 尺寸 | `SWINX_FB_WIDTH/HEIGHT`（默认 320×240） | 改尺寸要同步三处（§4.5） |
 
 🚨 **运行时 DLL 影子问题**：system-deps 构建链接 `libcairo-2.dll` 时，PATH 里另一套 MinGW（WorkBuddy/PortableGit、Android platform-tools、xampp）会影子掉 `libwinpthread-1.dll` / `zlib1.dll` / `libiconv-2.dll`，进程在 `main()` 前以 `0xc0000139 ENTRYPOINT_NOT_FOUND` 秒退，**看着像代码 bug**。判据：最小 cairo 程序也挂。`cmake/CopyRuntimeDlls.cmake` 已用 `file(GET_RUNTIME_DEPENDENCIES)` POST_BUILD 把 20 个 DLL 收拢到 exe 同级（exe 目录优先级最高，收拢后与 PATH 无关）。
@@ -597,7 +597,12 @@ SwinxInjectKey(tid, WM_KEYDOWN, 'A', 0);          // 经 postMsg 路由到目标
 - 🚨 `SStringT` 是单线程的（COW 裸引用计数）——跨线程传字符串一律 `std::string / std::wstring`。
 - 🚨 被静态析构 / 多任务访问的函数局部静态必须 leak-on-purpose。
 - 定时器到期回调在定时器线程上下文，业务自己切线程。
-- `std::thread` 垫片建的任务栈默认 `SWINX_FR_DEFAULT_STACK_WORDS`（裸机 8192 字 / 宿主 32768 字）。
+- `std::thread` 垫片建的任务栈默认 `SWINX_FR_DEFAULT_STACK_WORDS`（裸机 16384 字 = 64 KB / 宿主 32768 字）。
+  裸机这个值是量出来的，不是拍的：文字真的走光栅化以后，渲染一帧要 ~44 KB——
+  `pixman-general.c` 的 `general_composite_rect()` 自带 24,576 B 的 scanline 缓冲，
+  加上 cairo 的梯形/span 状态 ~14 KB。40 KB 必溢（死在 `UpdateWindow` 里），
+  48 KB 能走完，故留到 64 KB。**注意单位**：裸机是 FreeRTOS word，ESP-IDF 的
+  `xTaskCreate` 是 byte，同一个宏名两边差 4 倍。
 
 ---
 
@@ -613,7 +618,7 @@ SwinxInjectKey(tid, WM_KEYDOWN, 'A', 0);          // 经 postMsg 路由到目标
 | `.init_array` 未执行 | 裸机 | 第一个窗口构造即在字符串深拷贝 HardFault | `__libc_init_array()` 三件套（§2.5②） |
 | `.bss` 并入 data 段 | 裸机 | QEMU 拒提交 blob，复位即 INVSTATE | `.bss (NOLOAD) > RAM AT > RAM`（§2.5③） |
 | FLASH > 4MB | 裸机 | 复位即 HardFault | census 只链不跑；运行版 gc-sections |
-| 任务栈偏小 | 裸机 | -O0 全量构建栈溢出，症状离奇（mutex 里出现 a5a5） | `SWINX_FR_DEFAULT_STACK_WORDS=8192` |
+| 任务栈偏小 | 裸机 | 溢出点看着毫无规律（`UpdateWindow` 里、mutex 里出现 a5a5、`-O0` 全量构建更容易撞） | `SWINX_FR_DEFAULT_STACK_WORDS=16384`（64 KB）；一帧真要 ~44 KB，见 §5 |
 | 串口 stdio 背压 | QEMU | 被 timeout 杀，假 hang | `-serial file:`；删打印探针 |
 | qemu 不认 MSYS 路径 | QEMU | `-serial file:/tmp/x.log` 直接 `rc=1` 无日志 | 写 `file:C:/.../x.log` |
 | include 次序 | 全部 | pthread 符号链接失败 / 内核编不过 | stl 覆盖头 `BEFORE`；`swinx/src` 别盖内核头（§2.4） |
@@ -654,10 +659,10 @@ SwinxInjectKey(tid, WM_KEYDOWN, 'A', 0);          // 经 postMsg 路由到目标
 | # | 事项 | 说明 |
 |---|---|---|
 | 1 | 目标板适配 | 换 uart 驱动 + 链接脚本 + FreeRTOSConfig 时钟/堆；把固定 320×240 fb 换成 LCD 控制器帧缓冲 |
-| 2 | 字体 | 当前字体桥能跑但**测宽与绘制不一致**，末尾会被截断（`...fra\|mebuffer.`）。要真用起来需要接 freetype 或换位图字体 |
-| 3 | 缺桩补齐 | `LoadImageW/A`、`CreateIconFromResource` 仍是 NULL 桩，直接卡住 `ICON:` 资源与窗口图标 |
+| 2 | 字体（已完成，剩中文子集） | 已改为**烘焙位图 + `cairo_user_font_face`**：整数 advance 让测宽与绘制一致，截尾消失（`sfr_font.cpp` + `sfr_font_data.h`，工具 `swinx/tools/bakefont`）。当前只覆盖 ASCII 0x20-0x7E，要中文按码位重烘 |
+| 3 | 缺桩补齐（已完成） | `LoadImageW/A`、`CreateIconFromResource` 不再是 NULL 桩：`cursoricon.cpp` 编进目标，`ICON:` 资源与 `<icon src="...">` 可用 |
 | 4 | swinx 输入缺陷 | 建窗后第一个 `WM_MOUSEMOVE` 被吞（§5.3）；真人连续移动不受影响，但注入类场景都要铺底 |
-| 5 | 自动化回归 | 目前没有像素级回归（§4.5 末尾的取舍）。若要做，正确做法是断言控件状态（`GetState/GetAlpha/GetWindowRect`）而不是比像素 |
+| 5 | 自动化回归 | 已有两条无头自检（`SOUI_SIM_FONTPROBE` 断言 measure==draw、`SOUI_SIM_ICONPROBE` 断言图标落到像素），但整体仍没有像素级回归（§4.5 末尾的取舍）。若要做，正确做法是断言控件状态（`GetState/GetAlpha/GetWindowRect`）而不是比像素 |
 
 ---
 
@@ -694,7 +699,7 @@ SwinxInjectKey(tid, WM_KEYDOWN, 'A', 0);          // 经 postMsg 路由到目标
 | `SOUI_FREERTOS_HOST_EMU` | `-DSOUI_FREERTOS_EMULATE_HOST=ON` | 用 POSIX 模拟内核原语（测试用） |
 | `SWINX_NO_EXCEPTIONS` | `-DSOUI_FREERTOS_NO_EXCEPTIONS=ON` | 配合 `-fno-exceptions -fno-rtti`，`swinx_stl.h` 把 `throw` 改成 abort |
 | `WCHAR_SIZE=__SIZEOF_WCHAR_T__` | `swinx/freeRTOS.cmake` + `soui.cmake` | `uniconv.h` 的转换宽度，永远取编译器内建 |
-| `SWINX_FR_DEFAULT_STACK_WORDS` | 同上 | STL 垫片建任务的默认栈（裸机 8192 / 宿主 32768 字） |
+| `SWINX_FR_DEFAULT_STACK_WORDS` | 同上 | STL 垫片建任务的默认栈（裸机 16384 / 宿主 32768 字） |
 | `SWINX_FB_WIDTH/HEIGHT` | configure 参数 | 帧缓冲尺寸（默认 320×240，静态分配） |
 | `CAIRO_WIN32_STATIC_BUILD` | `soui.cmake`（宿主） | 让 vendored cairo 用静态导入而不是 `dllimport` |
 | `SOUI_FR_CENSUS` | configure 参数（`soui_fr`） | census 链接：保留全部段，暴露符号缺口 |
