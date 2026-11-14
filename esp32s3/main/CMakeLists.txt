@@ -51,9 +51,6 @@ idf_component_register(
 # -w: SOUI's public headers are written for MSVC and trip IDF's -Werror=all
 #     with ~80 diagnostics (unused-value, unknown-pragmas, multistatement-macros,
 #     reorder, overloaded-virtual).  The soui component is built the same way.
-# -include soui_idf_compat.h: same force-included preamble as the soui
-#     component.  Without it this TU has no <climits>, and SOUI's SWnd.h uses
-#     LLONG_MAX / ULLONG_MAX.
 # -std=gnu++17: same reason as the soui component (u8"" literal semantics).
 # -fexceptions: SOUI is compiled with exceptions; keep the app TU ABI identical
 #     (sdkconfig.defaults also turns on CONFIG_COMPILER_CXX_EXCEPTIONS).

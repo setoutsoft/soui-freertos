@@ -48,7 +48,7 @@ esp32s3/
 │   ├── soui_cairo/             cairo + pixman + libpng + zlib（纯 C）
 │   └── soui/                   swinx(FreeRTOS 平台层) + SOUI + utilities
 │       │                       + render-gdi + imgdecoder-stb/aupng
-│       ├── include/soui_idf_compat.h   force-include 的 <climits> 等补丁
+│       ├── include/soui_idf_compat.h   force-include 等补丁
 │       └── framebuffer_idf.cpp         ARGB32 framebuffer 放 PSRAM
 ├── main/
 │   ├── app_main.cpp            UI 任务 + SResProviderPE 资源装配 + 消息泵

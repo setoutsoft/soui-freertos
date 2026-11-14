@@ -220,7 +220,7 @@ set(SOUI_FR_INCLUDE_IMGSTB
     "${SOUI_FR_ROOT}/third-part/pbl_aupng/include"
 )
 
-# The force-included compat header (<climits>/<cstdint> + the STL shims).
+# The force-included compat header (the STL shims).
 set(SOUI_FR_COMPAT_HEADER "soui_fr_compat.h")
 
 # -----------------------------------------------------------------------------

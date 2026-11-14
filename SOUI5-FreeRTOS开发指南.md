@@ -142,7 +142,7 @@ soui-freertos/                    # soui4 的 git 子模块
 ├── demo/                         # 最小 FreeRTOS 基座：startup / syscalls / uart / FreeRTOSConfig / 链接脚本 / 工具链
 │   └── cmake/toolchain-arm-freertos.cmake
 ├── swinx_test/                   # swinx 平台层单测（6 个 main_*.cpp，QEMU 实跑）
-├── soui_fr/                      # SOUI 核心编译/链接探针 + SApp 冒烟（QEMU 真出图）
+├── soui_fr/                      # SApp 冒烟（QEMU 真出图）；与 soui_sim 同一套 soui.cmake，只多工具链与板级文件
 ├── FreeRTOS-Kernel/              # vendored 官方内核（ARM_CM3 + MSVC-MingW 两个 port）
 └── README.md
 ```
@@ -298,23 +298,31 @@ qemu-system-arm -M mps2-an385 -kernel build/swinx_test.elf \
 
 本工程交叉编译通过（`swinx_test.elf`，9.9MB，未裁剪），QEMU 实跑 **35 项 `OK` / 0 `FAIL`**，末行 `SWINX WINOBJS FREERTOS PASS`，`fb.ppm` 正常落盘（320×240，230415 字节）——裸机路径（`SFR_HOSTED=0`）行为稳定。
 
-### 3.3 `soui_fr` —— SOUI 核心探针 + SApp 冒烟
+### 3.3 `soui_fr` —— SApp 冒烟（裸机，与 `soui_sim` 同一套 `soui.cmake`）
 
 ```bash
-"/c/Program Files/CMake/bin/cmake" -S D:/work/soui4/soui-freertos/soui_fr \
-    -B D:/work/soui4/soui-freertos/soui_fr/build -G Ninja -DSOUI_FR_CENSUS=ON
+cmake -S D:/work/soui4/soui-freertos/soui_fr \
+    -B D:/work/soui4/soui-freertos/soui_fr/build -G Ninja \
+    -DCMAKE_TOOLCHAIN_FILE=D:/work/soui4/soui-freertos/demo/cmake/toolchain-arm-freertos.cmake
 ninja -C D:/work/soui4/soui-freertos/soui_fr/build
-cd D:/work/soui4/soui-freertos/soui_fr
-qemu-system-arm -M mps2-an385 -kernel build/soui_fr.elf \
+cd D:/work/soui4/soui-freertos/soui_fr/build
+qemu-system-arm -M mps2-an385 -kernel soui_fr.elf \
     -serial file:soui_run.log -display none -semihosting     # 出 soui_fb.ppm
 ```
 
-- `SOUI_FR_CENSUS=ON`：`--whole-archive` 且关 `--gc-sections`，把全部符号缺口一次性暴露出来（>4MB，**只链不跑**）；`OFF` 时开 gc-sections，是可运行版（SApp 全链路 text 约 2.7MB）。
-- 编译范围：utilities 全套 + SOUI core + res.mgr + helper/layout/matrix/event/animation + **control + activex 全量** + `rendergdi_fr`。仅排除 4 个文件：`SwndAccessible.cpp`（msaa）、两个 NDK resprovider、`SOhosApp.cpp`（NAPI）。
-- 编译垫片只剩 1 个 `soui_fr_compat.h`（🚨 CMake 会**去重**重复的 `-include`，第二个会变成裸输入文件报 multiple files——多个预包含必须折进一个头）。
+工程自己的 `CMakeLists.txt` 只有 `include(../cmake/soui.cmake)` + `soui_fr_project(...)` 加三段目标专属信息：工具链（命令行给）、板级文件（`../demo/startup.c` / `syscalls.c` / `mps2/uart_mps2.c` + 链接脚本 + `-Wl,--entry=Reset_Handler`）、以及内核源（框架只给宿主构建加内核，裸机由工程自己列 `tasks.c/queue.c/…/ARM_CM3/port.c/heap_3.c`）。
+
+- 默认 `CMAKE_BUILD_TYPE=MinSizeRel`（`-Os`）。`SOUI_FR_CENSUS=ON` 时关 `--gc-sections`、`--whole-archive` 全留，把全部符号缺口一次性暴露出来（>4MB，**只链不跑**）；`OFF`（默认）是可运行版，SApp 全链路 text ≈2.6MB。
+- 链接范围：`utilities4_fr` + `soui4_fr` + `rendergdi_fr` + `imgdecoder_stb_fr` + `swinx_core` + cairo/pixman/libpng/zlib。排除 `SwndAccessible.cpp`（msaa）、两个 NDK resprovider、`SOhosApp.cpp`（NAPI）；`src/activex` 不参与裸机构建（无 COM/OLE）。
+- 编译垫片只剩 1 个 `cmake/soui_fr_compat.h`（🚨 CMake 会**去重**重复的 `-include`，第二个会变成裸输入文件报 multiple files——多个预包含必须折进一个头）。
+- 🚨 **两个 include 顺序坑**（都由 `soui_fr/CMakeLists.txt` 用 `BEFORE` 显式钉住）：
+  1. `FreeRTOS-Kernel/include` 必须排在 `swinx/src` 之前 —— 内核把 `list.h` 放在 `include/` 下，`list.c` 的 `#include "list.h"` 否则落到 `swinx/src/list.h`（Wine 那份），`List_t` 直接未定义；
+  2. `demo/mps2`（`FreeRTOSConfig.h`）必须排在 `../demo` 之前 —— `../demo` 为 `<uart.h>` 在路径里，但它还带了一份 **lm3s6965 的** `FreeRTOSConfig.h`，选错了照样链接成功、运行时堆大小/优先级全错。
 - 链接侧原 49 个桩已全部归位 swinx `platform/freertos/`（`sysbridge.cpp` 扩容 + `dlfreertos.cpp` + `dlghelper.cpp`），census **0 未定义**。
 
-SApp 冒烟链路：`mem_res_provider.cpp`（表驱动内存 `IResProvider`，内嵌 `LAYOUT:APP_MAIN` XML）→ `Render_Gdi_SCreateInstance` → `SApplication` → `AddResProvider` → `SHostWnd` → `CreateEx` → `ShowWindow/UpdateWindow` → semihosting dump PPM。
+SApp 冒烟链路：`mem_res_provider.cpp`（表驱动内存 `IResProvider`，内嵌 `LAYOUT:APP_MAIN` XML）→ `SApplication` + `SAppCfg{SetRender(Render_Gdi).SetImgDecoder(ImgDecoder_Stb).SetAppResMem(pRes)}.DoConfig()` → `SHostWnd` → `CreateEx` → `ShowWindow/UpdateWindow` → semihosting dump PPM。串口实跑输出 `[app] SAppCfg::DoConfig=1` / `UpdateWindow rc=1` / `dump rc=0`，`soui_fb.ppm` 目检为蓝底方块 + 文字。
+
+> 内存 provider 里没有 `uidef:xml_init`，`DoConfig` 会打一条 `uidef was not found in the specified resprovider` 警告——不影响布局（该布局每个控件都写了显式属性），属于预期噪声。
 
 🚨 XML 8 位颜色串是 **`#RRGGBBAA`**（`SNamedValue.cpp` 里 `swscanf("%02x%02x%02x%02x",&r,&g,&b,&a)`），按 AARRGGBB 写会把 alpha 当 R 用、颜色发灰发暗。
 

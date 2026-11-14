@@ -4,8 +4,9 @@
  * Minimal in-memory IResProvider for the FreeRTOS SApp smoke test.
  * Resources are static ROM string tables (no filesystem), enough to feed
  * SHostWnd with one layout XML ("LAYOUT:APP_MAIN").  Icons / bitmaps /
- * cursors are not provided (no imgdecoder wired in this phase): the test
- * layout deliberately uses color fills and text only.
+ * cursors are still not provided: imgdecoder-stb is linked and installed by
+ * SAppCfg, but this provider only serves the layout, and the test layout
+ * deliberately uses colour fills and text.
  */
 #include <interface/SResProvider-i.h>
 #include <helper/obj-ref-impl.hpp>

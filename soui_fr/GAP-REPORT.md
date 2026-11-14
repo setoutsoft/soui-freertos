@@ -19,7 +19,7 @@
 编译侧仅需 3 个探针垫片（`soui_fr/shim/`，正式移植应收进 swinx `platform/freertos/`）：
 - `sys/mman.h`（SOUI POSIX 分支遗留 include，mmap 无实际使用）
 - `dirent.h`（newlib 自带版 `#error not supported`；SResProvider.cpp 目录枚举）
-- `soui_fr_compat.h`（force-include：newlib 缺 `<climits>` 传递包含；`SSingleton2.h` 缺 `sdef.h`；`SAnimation.h` 缺 `SAttrCracker.h`；`SViewBase.cpp` 上游唯一不包含 souistd.h 的源文件，单独 `-include souistd.h`）
+- `soui_fr_compat.h`（传递包含；`SSingleton2.h` 缺 `sdef.h`；`SAnimation.h` 缺 `SAttrCracker.h`；`SViewBase.cpp` 上游唯一不包含 souistd.h 的源文件，单独 `-include souistd.h`）
 
 ## 链接 census（`-Wl,--whole-archive` + 无 gc-sections，全量符号解析）
 

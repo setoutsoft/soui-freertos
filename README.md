@@ -13,7 +13,7 @@ SOUI4/SOUI5 移植 FreeRTOS 的全部实验工程。上游源码在 `D:/work/sou
 | `templates/app/` | Windows 宿主 | 新建工程模板：复制即用，构建脚本 2 行 |
 | `demo/` | QEMU mps2-an385 (Cortex-M3) | 裸机 FreeRTOS 冒烟：UART 输出 + 调度器跑通，移植 earliest 基线 |
 | `swinx_test/` | QEMU mps2-an385 | swinx freertos 平台层单测（fb/input/syncobj/render 等 main_*.cpp 变体） |
-| `soui_fr/` | QEMU mps2-an385 | 完整 SOUI SApp 冒烟：XML 布局 → render-gdi(cairo) → LCD fb（截图由程序运行时落盘） |
+| `soui_fr/` | QEMU mps2-an385 | 完整 SOUI SApp 冒烟：XML 布局 → render-gdi(cairo) → LCD fb（截图由程序运行时落盘）。构建与 `soui_sim` 同一套 `soui.cmake`，差异只在 toolchain、板级文件与内核源 |
 | `soui_sim/` | Windows 宿主 (MinGW) | **FreeRTOS Windows 模拟器**：FreeRTOS-Kernel MSVC-MingW port + swinx freertos 层 + SDL2 出图/鼠标注入，与 QEMU 目标 95% 同构，用于快速迭代交互测试 |
 | `FreeRTOS-Kernel/` | — | vendored 内核（demo / soui_fr / swinx_test / soui_sim 共用，含 `portable/MSVC-MingW`） |
 
@@ -111,7 +111,13 @@ ninja -C soui_sim/build_sys
 # 想用 vendored 源码（可复现 / 交叉编译一定是这条路）
 cmake -S soui_sim -B soui_sim/build -G Ninja -DSOUI_FR_USE_SYSTEM_DEPS=OFF
 
-# QEMU 工程（demo / swinx_test / soui_fr）保持各自 CMake
+# 裸机（QEMU mps2-an385）：与宿主工程同一套 soui.cmake，只多一个 toolchain；
+# 板级文件（startup/syscalls/uart + 链接脚本）和内核源留在工程自己的 CMakeLists 里
+cmake -S soui_fr -B soui_fr/build -G Ninja \
+    -DCMAKE_TOOLCHAIN_FILE=../demo/cmake/toolchain-arm-freertos.cmake
+ninja -C soui_fr/build
+
+# demo / swinx_test 仍是各自的 CMake（不依赖 soui.cmake）
 cmake -S <proj> -B <proj>/build -G Ninja && ninja -C <proj>/build
 ```
 
