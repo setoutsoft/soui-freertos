@@ -97,7 +97,6 @@ set(APP_SRCS
     ${DEMO_DIR}/mps2/uart_mps2.c
     # ---- application -------------------------------------------------------
     ${CMAKE_CURRENT_SOURCE_DIR}/soui_app.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/mem_res_provider.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/hooks.c
     # ---- FreeRTOS kernel (bare metal: this project owns port + heap) --------
     ${FREERTOS_DIR}/tasks.c
@@ -108,13 +107,17 @@ set(APP_SRCS
     ${FREERTOS_DIR}/portable/GCC/ARM_CM3/port.c
     ${FREERTOS_DIR}/portable/MemMang/heap_3.c)
 
-# NO_RESOURCES: this app carries its resources as ROM tables behind
-# mem_res_provider.cpp -- there is no uires.idx and no PE/windres blob, which
-# is exactly the case soui_fr exists to prove (an ELF target supplying its own
-# SResProvider).  INCLUDES: ../demo earns its place for <uart.h>.
+# Resources: the same windres COFF pipeline soui_sim uses -- uires.idx ->
+# soui_res.rc2/resource.h -> main.rc -> PE-COFF -> .incbin data blob.  At
+# runtime swinx's WindResResourceParser serves FindResource/LoadResource and
+# the app uses the standard SResProviderPE (no ROM C arrays, no filesystem).
+# On bare metal the blob goes into .rodata.embedded, 8-byte aligned (see
+# cmake/soui.cmake), so the mps2 linker script places it in FLASH.
+# INCLUDES: ../demo earns its place for <uart.h>.
 soui_fr_project(${project_name}
     SOURCES         ${APP_SRCS}
-    NO_RESOURCES
+    RESOURCES       uires
+    RESOURCE_SCRIPT main.rc
     INCLUDES        ${DEMO_DIR}
     OUTPUT_NAME     soui_fr.elf)
 

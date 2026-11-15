@@ -2,10 +2,17 @@
  * soui_fr/soui_app.cpp
  *
  * Real SOUI application smoke test on FreeRTOS:
- *   SApplication + SAppCfg (render-gdi/cairo + imgdecoder-stb + in-memory
- *   ResProvider + SHostWnd), i.e. the same bring-up sequence a desktop SOUI
+ *   SApplication + SAppCfg (render-gdi/cairo + imgdecoder-stb + PE-COFF
+ *   resource blob + SHostWnd), i.e. the same bring-up sequence a desktop SOUI
  *   app runs in _tWinMain().  The build side is identical to soui_sim's
  *   (cmake/soui.cmake); only the toolchain and the display backend differ.
+ *
+ * Resources come from a windres PE-COFF object embedded as data by
+ * cmake/soui.cmake (uires.idx -> rc2 -> main.rc -> COFF -> .incbin).  SAppCfg
+ * mounts that blob as both the system and the application resource provider,
+ * so layout XML, UIDEF and the APP_ICON RT_GROUP_ICON all go through
+ * SResProviderPE / FindResourceA / LoadImageA -- no C arrays, no filesystem,
+ * no hand-written .ico directory parsing.
  *
  * The host window paints through SOUI's memory render target -> BitBlt to
  * the swinx window DC -> cairo -> software framebuffer, and the whole fb is
@@ -35,8 +42,22 @@ extern "C"
 #include "uart.h"
 }
 
-// in-memory resource provider (mem_res_provider.cpp)
-extern SNS::IResProvider *CreateMemResProvider(void);
+// uiresbuilder-generated tables from uires.idx.  INIT_R_DATA makes this TU
+// the one that *defines* UIRES / R; every other TU only sees the declarations.
+#define INIT_R_DATA
+#include "resource.h"
+
+// Strong references to the embedded COFF blob.  swinx/src/resapi.cpp declares
+// them weak so images without resources still link; with --gc-sections a
+// weak-only reference is not enough to guarantee the .rodata.embedded section
+// survives.  app_task also prints the size as a "resources are in the image"
+// check.
+extern "C" const unsigned char _binary_soui_coff_o_start[];
+extern "C" const unsigned char _binary_soui_coff_o_end[];
+
+// swinx finds the windres blob through linker symbols, so any non-NULL module
+// handle works -- there is no HINSTANCE from WinMain on a bare target.
+static const HINSTANCE kAppInstance = (HINSTANCE)1;
 
 // ---------------------------------------------------------------------------
 // framebuffer dump via ARM semihosting (from swinx_test/main_dump.cpp)
@@ -180,27 +201,31 @@ static void app_task(void)
 {
     tprint("== SOUI SApp on FreeRTOS ==\n");
 
-    // 1. SApplication + SAppCfg
-    //    DoConfig() creates the render factory (render-gdi / cairo), wires the
-    //    image decoder (imgdecoder-stb) and mounts the resource provider -- the
-    //    same steps a desktop app leaves to the wizard-generated _tWinMain().
-    //    The one port-specific twist is the resource side: there is no
-    //    filesystem here, so the provider is a ROM table built by
-    //    mem_res_provider.cpp and handed over with SetAppResMem().
-    SNS::SApplication app((HINSTANCE)1);
-    SNS::IResProvider *pRes = CreateMemResProvider();
-    pRes->Init(0, 0);
-
+    // 1. SApplication + SAppCfg -- the wizard/CmakeApp bring-up, unchanged.
+    //    Both descriptors point at the same embedded COFF blob, exactly like
+    //    soui_sim: SOUI system theme (SYS_XML_SKIN, ...) plus the app uires
+    //    (UIDEF + LAYOUT + ICON).  SResProviderPE serves both through swinx's
+    //    WindResResourceParser.
+    SNS::SApplication app(kAppInstance);
     SNS::SAppCfg cfg;
     cfg.SetRender(SNS::Render_Gdi)
         .SetImgDecoder(SNS::ImgDecoder_Stb)
-        .SetAppResMem(pRes); // provider owns the ROM tables; no uidef ini in it
-    pRes->Release();         // SAppCfg holds its own reference now
+        .SetSysResPeHandle((HMODULE)kAppInstance)
+        .SetAppResPeHandle((HMODULE)kAppInstance);
 
     BOOL bCfg = cfg.DoConfig(&app);
     tprint("[app] SAppCfg::DoConfig=");
     tprint_int(bCfg);
     tprint("\n");
+    if (bCfg)
+    {
+        // Named ids from uiresbuilder's resource.h, same as a wizard app.
+        app.InitXmlNamedID((const LPCWSTR *)&R.name, (const int *)&R.id,
+                           (int)(sizeof(R.id) / sizeof(int)));
+        tprint("[app] COFF resource blob bytes=");
+        tprint_int((int)(_binary_soui_coff_o_end - _binary_soui_coff_o_start));
+        tprint("\n");
+    }
     if (!bCfg)
     {
         tprint("[app] SAppCfg::DoConfig failed\n");
@@ -210,7 +235,7 @@ static void app_task(void)
 
     // 2. host window from the embedded layout
     tprint("[app] before SHostWnd ctor\n");
-    SNS::SHostWnd hostWnd(_T("LAYOUT:APP_MAIN"));
+    SNS::SHostWnd hostWnd(UIRES.LAYOUT.XML_MAINWND);
     tprint("[app] before CreateEx\n");
     HWND hWnd = hostWnd.CreateEx(NULL, WS_POPUP, 0, 0, 0, 320, 240);
     tprint("[app] SHostWnd CreateEx hwnd=0x");

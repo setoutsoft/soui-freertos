@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Minimal uidef for the bare-metal smoke test.  The framebuffer is 320x240
+  physical pixels and the baked bitmap font is not DPI-scaled, so "px" keeps
+  every layout coordinate 1:1 with the framebuffer.
+
+  No values:* sections: this layout uses literal colours and strings on
+  purpose, so the app resource package stays small enough for the 4MB FLASH.
+  The SOUI system theme still comes from theme_sys_res.rc2 in main.rc.
+-->
+<UIDEF>
+  <unit defUnit="px"/>
+  <deffont value="size:14"/>
+</UIDEF>

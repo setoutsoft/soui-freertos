@@ -37,8 +37,8 @@ class CMainDlg : public SHostWnd
   protected:
     // named command (caption buttons) + id command (R.id.* from resource.h)
     EVENT_MAP_BEGIN()
-        EVENT_NAME_COMMAND(L"btn_close", OnClose)
-        EVENT_NAME_COMMAND(L"btn_min", OnMinimize)
+//        EVENT_NAME_COMMAND(L"btn_close", OnClose)
+//        EVENT_NAME_COMMAND(L"btn_min", OnMinimize)
         EVENT_ID_COMMAND(R.id.btn_test, OnSwitchImage)
         EVENT_ID_COMMAND(R.id.btn_anim, OnToggleAnim)
         EVENT_ID_HANDLER(R.id.cbx_speed, EventCBSelChange::EventID, OnCbxSpeedChange)

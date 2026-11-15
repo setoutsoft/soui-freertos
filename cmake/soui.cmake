@@ -152,7 +152,7 @@ function(soui_fr_add_resources out_var)
     set(_rc2 "${ARG_RC_OUT_DIR}/soui_res.rc2")
     set(_res_h "${ARG_RC_OUT_DIR}/resource.h")
 
-    if(WIN32)
+    if(CMAKE_HOST_WIN32)
         if(NOT EXISTS "${ARG_DIR}/uires.idx")
             message(FATAL_ERROR
                 "[soui_fr] ${ARG_DIR}/uires.idx not found. Point RESOURCES at the "
@@ -228,8 +228,14 @@ function(soui_fr_add_resources out_var)
 
     # --include-dir (long form): on recent binutils the short -I means
     # "input format", not "include path".
+    # windres shells out to `gcc -E -xc -DRC_INVOKED`; a cross toolchain's PATH
+    # has no host gcc, which windres reports only as "preprocessing failed.".
+    # Prepend the windres directory for this one command, like esp32s3 does.
+    get_filename_component(_windres_dir "${SOUI_FR_WINDRES}" DIRECTORY)
+    set(_windres_env "${CMAKE_COMMAND}" -E env
+        "--modify" "PATH=path_list_prepend:${_windres_dir}")
     add_custom_command(OUTPUT "${_coff}"
-        COMMAND ${SOUI_FR_WINDRES} --target=pe-x86-64
+        COMMAND ${_windres_env} ${SOUI_FR_WINDRES} --target=pe-x86-64
                 --include-dir "${ARG_RC_OUT_DIR}"
                 --include-dir "${SOUI_FR_ROOT}/soui-sys-resource"
                 -i "${ARG_SCRIPT}" -o "${_coff}" -O coff
@@ -239,13 +245,25 @@ function(soui_fr_add_resources out_var)
         VERBATIM)
 
     # ---- step 3: COFF -> .incbin data blob --------------------------------
-    # .balign 4 because coffparser does uint16/uint32 loads inside the blob and
-    # unaligned accesses fault on Cortex-M3 (x86 tolerates them, ARM does not).
+    # Bare metal: the mps2-an385 linker script only collects .text*/.rodata*
+    # into FLASH, so a plain .rdata section would be an orphan section.
+    # .balign 8 because coffparser / icon directories do uint32 loads that GCC
+    # may fuse into LDRD, which faults on Cortex-M3 unless the address is
+    # 8-byte aligned (x86 tolerates anything).
+    # Host builds keep the PE-friendly .rdata name (COFF section names are
+    # limited to 8 characters, so ".rodata.embedded" cannot be used there).
+    if(SOUI_FR_BARE_METAL)
+        set(_blob_section ".section .rodata.embedded,\"a\"")
+        set(_blob_align ".balign 8")
+    else()
+        set(_blob_section ".section .rdata")
+        set(_blob_align ".balign 4")
+    endif()
     set(_asm "${CMAKE_CURRENT_BINARY_DIR}/${ARG_NAME}.S")
     set(_obj "${CMAKE_CURRENT_BINARY_DIR}/${ARG_NAME}.blob.o")
     file(GENERATE OUTPUT "${_asm}" CONTENT "
-    .section .rdata
-    .balign 4
+    ${_blob_section}
+    ${_blob_align}
     .globl _binary_soui_coff_o_start
     .globl _binary_soui_coff_o_end
 _binary_soui_coff_o_start:

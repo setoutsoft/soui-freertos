@@ -50,7 +50,7 @@ soui_fr_project(hello_freertos SOURCES main.cpp SIM_HOST)
 | 三方库 | cairo/pixman/libpng/zlib，宿主默认用系统包（pkg-config 能证明时），交叉编译强制 vendored 源码 |
 | 平台层 | swinx freertos 层（`src/*.cpp` + `platform/freertos/*` + cairo gdi 后端/字体桥） |
 | SOUI | utilities + core + render-gdi + imgdecoder-stb（whole-archive 保留 COM 注册对象） |
-| 资源 | `uires/uires.idx` → uiresbuilder → windres COFF → `.incbin` 数据段（`.balign 4`，Cortex-M 非对齐会 fault）。只有 uiresbuilder 那一步是 Windows 独占（`tools/uiresbuilder.exe`）；windres/incbin 任何装了 mingw 的宿主都能跑。产物 `soui_res.rc2` + `resource.h` 输出到源码目录 `<项目>/<name>_res/` 并**入库**，所以换平台/换机器直接复用，不必先在 Windows 上过一遍 |
+| 资源 | `uires/uires.idx` → uiresbuilder → windres COFF → `.incbin` 数据段。宿主用 `.rdata`、裸机用 `.rodata.embedded` + `.balign 8`（mps2 ld 只收 `.text*/.rodata*`，`.rdata` 会变 orphan；Cortex-M3 的 LDRD 要求 8 字节对齐）。只有 uiresbuilder 那一步是 Windows 独占（`tools/uiresbuilder.exe`，按 `CMAKE_HOST_WIN32` 判断，交叉编译 `WIN32` 恒 FALSE）；windres/incbin 任何装了 mingw 的宿主都能跑。产物 `soui_res.rc2` + `resource.h` 输出到源码目录 `<项目>/<name>_res/` 并**入库**，换平台/换机器直接复用 |
 | 启动 | 和 wizard 工程一样自己写：`SApplication` + `SAppCfg`（`SetRender(Render_Gdi)` / `SetImgDecoder(ImgDecoder_Stb)` / `SetSysResPeHandle` / `SetAppResPeHandle`）→ `cfg.DoConfig(&app)`；`SAppCfg` 内部把 render-gdi 工厂与 imgdecoder-stb 一起注册好（缺后者会在 `LoadSystemNamedResource` 里解码系统皮肤时静默段错误），不再是框架提供的"启动胶水" |
 | 宿主出图 | `SIM_HOST` 时链 `sim/soui_sim_hal.cpp`（SDL2 窗口 / ARGB 纹理 / 鼠标键盘注入） |
 | Windows 运行 | system-deps 构建自动把 20 个运行时 DLL 收拢到 exe 同级 |
@@ -227,38 +227,35 @@ SOUI_SIM_ICONPROBE=1 SDL_VIDEODRIVER=dummy ./soui_sim.exe
 字形的右边距，不允许"少画一段"）。它跑在 `SApplication` 之前，所以是不依赖
 窗口的纯 GDI 检查；图标自检同理，只看资源块。
 
-### 裸机目标（soui_fr / QEMU）的图标显示现状
+### 裸机目标（soui_fr / QEMU）的图标显示
 
-上面的图标自检在 **soui_sim（宿主模拟器）** 上全链通过，证明 `ICON:` 的
-资源读取与解码路径（`RT_GROUP_ICON` → `CreateIconFromResource` →
-`LoadImageA` → `DrawIconEx`）在本端口是通的。
+`soui_fr` 现在和 `soui_sim` 用**同一套资源链**：`uires/uires.idx` →
+uiresbuilder → `main.rc`（含 `"APP_ICON" ICON "../res/app.ico"`）→ windres
+PE-COFF → `.incbin` 数据段 → `SResProviderPE`。布局
+`uires/xml/dlg_main.xml` 里放了两个 `<icon>`（`APP_ICON:16` / `APP_ICON:32`），
+QEMU mps2-an385 实跑 `CreateEx → UpdateWindow → dump_fb_ppm` 全程正常，dump
+出的 320×240 帧里两个橙色"窗口"图标都在；像素统计 16×16 区域 252 个非背景
+像素、32×32 区域 1000 个、空白对照区 0 个，且无 `GetMatchResProvider failed`。
 
-更进一步：soui_sim 跑**完整窗口**（`dlg_main.xml` 含
-`<icon src="APP_ICON:16">`）时，`SIconWnd` 持真实 `HICON` 的渲染路径也正常——
-不再是 headless 探针、而是真窗口合成。无头跑
-（`SDL_VIDEODRIVER=dummy SOUI_SIM_DUMP_FRAME=1 SOUI_SIM_AUTOEXIT=1
-./soui_sim.exe`）dump 出的第 1 帧里，标题栏 `app_logo` 右侧出现 16×16 橙色
-窗口标记（圆角框 + 中间镂空，正是 `res/app.ico` 的"窗口"图样）；像素分析确认
-254 个非背景像素、包围盒 (24,6)–(45,21)。窗口正常
-`CreateEx → UpdateWindow → autoexit`，无任何 `load icon failed` 或崩溃。这把
-"图标能不能在 UI 里出现"在宿主端坐实，与下面裸机挂死形成对照（差异在裸机
-cairo framebuffer 渲染，而非资源 / `LoadImage` / `CreateIconFromResource` API）。
+旧版把布局/XML/图标做成 C++ 数组 + 手写 `IResProvider`，有两个裸机专属坑，
+随资源链改造一并消失：
 
-`soui_fr`（裸机 ARM / QEMU mps2-an385）这边，`mem_res_provider.cpp` 已经把
-`ICON:APP_ICON` 接好：`res/app.ico` 经 `gen_app_icon_h.py` 生成
-`app_icon_data.h` 字节数组，由 `LoadIcon()` 自行解析 `.ico` 文件目录（16 字节
-目录项、末 4 字节是文件内偏移，与 PE 的 14 字节 + 2 字节 `wResId` 不同，不能直接
-套 `LookupIconIdFromDirectoryEx` 的返回值做索引），挑最匹配帧后用
-`CreateIconFromResource` 造出 `HICON`。`LoadIcon` 本身在裸机上**不会挂**。
+- **LDRD 对齐 → `CreateEx` 挂死**：`LoadIcon()` 连读两个 `DWORD` 被 GCC 合并
+  成 `LDRD`，而 `k_app_icon_ico[]` 落在奇数地址（`0x00173e01`），Cortex-M3
+  的 LDRD 要求 8 字节对齐 → UsageFault → `Default_Handler` 死循环。QEMU+GDB
+  抓到 fault PC `0x1082: ldrd r1,r5,[r4,#8]`。windres 的资源数据按 4/8 字节
+  对齐，`LoadImageA` 走 Wine 的解析，不再有手写指针强转。
+- **UTF-16 资源名全变空串**：COFF 里 `LAYOUT` / `UIDEF` / `APP_ICON` 等名字是
+  UTF-16LE，`coffparser` 在 `wchar_t=4` 的平台调 `to_unicode(CP_UTF16_LE)`，
+  裸机 newlib 的 iconv 没有 UTF-16 源转换器 → 所有命名资源解析成 `L""`
+  （`EnumResourceTypesA` 只剩 `#14` / `#3` 两个整数类型），`FindResourceA`
+  全部 miss。已在 `swinx/src/platform/freertos/sysbridge.cpp` 给
+  `to_unicode` / `builtinToUnicode` 补 UTF-16LE/BE 内置转换。
 
-但 `SIconWnd` 一旦持有一个真实 `HICON`，就会在 `SHostWnd::CreateEx` 期间
-（布局测量 `MeasureContent → GetIconInfo`，以及之后的 `DrawIconEx`）在裸机
-cairo framebuffer 上**挂死**（QEMU 在 `CreateEx` 之后不再有任何输出，也无
-`*** STACK OVERFLOW ***`，是 SIconWnd/图标的渲染路径问题，与上面的资源读取
-API 实现无关）。因此 `soui_fr` 的冒烟测试布局目前**不含 `<icon>` 元素**，
-只用文字与色块验证字体与基础 UI；图标 API 实现保留就绪，待 SIconWnd 的裸机
-渲染路径排掉后再把元素加回布局。排查需要 QEMU + GDB 跟 `SIconWnd` 对
-`HICON` 的使用，建议作为后续独立任务。
+配套构建细节（`cmake/soui.cmake`）：uiresbuilder 按 `CMAKE_HOST_WIN32` 判断；
+windres 命令前置 MinGW 目录到 PATH（否则交叉工具链下 `gcc -E` 预处理失败）；
+裸机 blob 段名与 8 字节对齐；`soui_app.cpp` 对
+`_binary_soui_coff_o_start/_end` 做强引用，避免 `--gc-sections` 丢弃 blob。
 
 ## 调试与排障
 
@@ -376,7 +373,3 @@ swinx 里判断"是不是 FreeRTOS 平台 / 有没有宿主 OS / 内核原语从
   分支在本端口未验证，测试图标故意用未压缩的 32bpp DIB 分帧。
 - **光标仍然不绘制**：`LoadCursor` 走 `CursorMgr`，帧缓冲路径没有指针图元；
   `cursoricon.cpp` 只补了图标侧。`DestroyCursor` 仍是空实现。
-- **`soui_fr` 裸机目标暂不在 demo 里渲染图标**：`ICON:` 资源与 `LoadIcon`
-  已实现并验证（见"裸机目标的图标显示现状"），但 `SIconWnd` 持真实 `HICON` 在
-  裸机 cairo framebuffer 上 `CreateEx` 挂死，属图标渲染路径问题，未包含在
-  当前冒烟测试布局中。

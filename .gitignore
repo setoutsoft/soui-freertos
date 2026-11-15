@@ -23,3 +23,4 @@ Thumbs.db
 # ---- 打包备份（esp32s3.zip 有 585 MB，只作本地备份，不入库）----
 esp32s3.zip
 *.zip
+esp32s3/tools/.espressif/

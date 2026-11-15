@@ -19,4 +19,7 @@
 		<file name="color" path="values\color.xml" />
 		<file name="skin" path="values\skin.xml" />
 	</values>
+	<icon>
+	   <file name="app_ico" path="icon\app.ico"/>
+	</icon>
 </resource>

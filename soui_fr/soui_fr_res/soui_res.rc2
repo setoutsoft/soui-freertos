@@ -1,0 +1,7 @@
+//stamp:01dd74a2885f262b
+/*<------------------------------------------------------------------------------------------------->*/
+#define DEFINE_UIRES(name, type, file_path)\
+    name type file_path
+
+DEFINE_UIRES(XML_INIT,	UIDEF,	"uires/uidef/init.xml")
+DEFINE_UIRES(XML_MAINWND,	LAYOUT,	"uires/xml/dlg_main.xml")

@@ -1,0 +1,23 @@
+// main.rc -- soui_fr application resource script.
+//
+// Same shape as soui_sim/main.rc and esp32s3/main.rc: windres compiles this
+// into ONE PE-COFF object carrying
+//
+//   soui_res.rc2        app resources, generated from uires/uires.idx
+//   theme_sys_res.rc2   SOUI system resources (skins / msgbox / editmenu)
+//   "APP_ICON" ICON     RT_GROUP_ICON + RT_ICON frames from ../res/app.ico
+//
+// cmake/soui.cmake embeds that object as data (.incbin, .rodata.embedded on
+// bare metal) and swinx's WindResResourceParser serves FindResource/
+// LoadResource, so the app uses the standard SResProviderPE path.  Nothing is
+// loaded from disk and no C array is generated.
+//
+// windres resolves paths relative to its working directory (this directory);
+// --include-dir adds soui_fr_res/ and soui-sys-resource/.
+#include "soui_res.rc2"       // app resources     (--include-dir <build>/../soui_fr_res)
+#include "theme_sys_res.rc2"  // system resources  (--include-dir soui-sys-resource)
+
+// String name (not a numeric ID) on purpose: SIconWnd hands the name from the
+// XML to LoadImageA, which asks the resource tree for RT_GROUP_ICON "APP_ICON"
+// and then for the RT_ICON the group points at.
+"APP_ICON" ICON "../res/app.ico"

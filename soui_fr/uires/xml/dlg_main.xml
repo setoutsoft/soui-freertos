@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  soui_fr smoke-test layout, served from the windres PE-COFF resource blob.
+
+  The two <icon> elements are the regression check for the icon path:
+    src="APP_ICON:16" -> SIconWnd::OnAttrIcon -> LOADICON2
+                      -> SResProviderMgr::LoadIcon("APP_ICON", 16, 16)
+                      -> SResProviderPE::LoadIcon -> LoadImageA
+                      -> FindResourceA(RT_GROUP_ICON) -> RT_ICON #2
+                      -> CreateIconFromResource -> DrawIconEx
+    src="APP_ICON:32" is the same chain with the 32x32 frame.
+  APP_ICON is a string-named RT_GROUP_ICON built by main.rc from
+  ../res/app.ico; no C array, no filesystem, no hand-written .ico parser.
+-->
+<SOUI name="mainWindow" title="SOUI5 on FreeRTOS" wndType="appWnd" appWnd="0">
+  <root width="320" height="240" colorBkgnd="#103018FF">
+    <window name="wnd_banner" pos="20,20,300,120" colorBkgnd="#2070C0FF">
+      <text name="txt_title" pos="10,10,-10,-10" colorText="#FFFFFFFF">Hello SOUI5 on FreeRTOS</text>
+    </window>
+
+    <!-- 16px frame and 32px frame side by side -->
+    <icon name="ico_demo16" src="APP_ICON:16" pos="20,132,36,148"/>
+    <icon name="ico_demo32" src="APP_ICON:32" pos="44,132,76,164"/>
+    <text name="txt_caption" pos="84,138" colorText="#E0B020FF">ICON: from windres COFF</text>
+
+    <text name="txt_status" pos="20,180" colorText="#E0B020FF">XML layout -&gt; cairo -&gt; framebuffer</text>
+  </root>
+</SOUI>

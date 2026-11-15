@@ -1,4 +1,4 @@
-﻿//stamp:0775aa2599c4fe86
+﻿//stamp:0775aa8f9e03aedb
 /*<------------------------------------------------------------------------------------------------->*/
 /*该文件由uiresbuilder生成，请不要手动修改*/
 /*<------------------------------------------------------------------------------------------------->*/
@@ -58,8 +58,6 @@ struct _R{
 	struct _name{
 		 const wchar_t * anim_box;
 		 const wchar_t * btn_anim;
-		 const wchar_t * btn_close;
-		 const wchar_t * btn_min;
 		 const wchar_t * btn_test;
 		 const wchar_t * cbx_field;
 		 const wchar_t * cbx_speed;
@@ -74,8 +72,6 @@ struct _R{
 	struct _id{
 		int anim_box;
 		int btn_anim;
-		int btn_close;
-		int btn_min;
 		int btn_test;
 		int cbx_field;
 		int cbx_speed;
@@ -106,19 +102,17 @@ struct _R{
 #ifdef __cplusplus
 	struct {
 		enum {
-			anim_box = 65547,
-			btn_anim = 65544,
-			btn_close = 65539,
-			btn_min = 65538,
-			btn_test = 65543,
-			cbx_field = 65541,
-			cbx_speed = 65542,
-			edt_field = 65545,
-			edt_input = 65546,
-			fade_box = 65548,
-			fps_label = 65549,
+			anim_box = 65545,
+			btn_anim = 65542,
+			btn_test = 65541,
+			cbx_field = 65539,
+			cbx_speed = 65540,
+			edt_field = 65543,
+			edt_input = 65544,
+			fade_box = 65546,
+			fps_label = 65547,
 			ico_demo = 65536,
-			img_view = 65540,
+			img_view = 65538,
 			txt_title = 65537
 		};
 	}ID;
@@ -131,8 +125,6 @@ struct _R R={
 	{
 		L"anim_box",
 		L"btn_anim",
-		L"btn_close",
-		L"btn_min",
 		L"btn_test",
 		L"cbx_field",
 		L"cbx_speed",
@@ -146,19 +138,17 @@ struct _R R={
 	}
 	,
 	{
-		65547,
-		65544,
-		65539,
-		65538,
-		65543,
-		65541,
-		65542,
 		65545,
-		65546,
-		65548,
-		65549,
-		65536,
+		65542,
+		65541,
+		65539,
 		65540,
+		65543,
+		65544,
+		65546,
+		65547,
+		65536,
+		65538,
 		65537
 	}
 	,

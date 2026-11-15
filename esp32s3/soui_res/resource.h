@@ -1,4 +1,4 @@
-﻿//stamp:0775ce99651e02ba
+﻿//stamp:0775cf029baba471
 /*<------------------------------------------------------------------------------------------------->*/
 /*该文件由uiresbuilder生成，请不要手动修改*/
 /*<------------------------------------------------------------------------------------------------->*/
@@ -24,6 +24,9 @@
 			const TCHAR * color;
 			const TCHAR * skin;
 			}values;
+		struct _icon{
+			const TCHAR * app_ico;
+			}icon;
 	};
 #endif//_UIRES_H_
 #ifdef INIT_R_DATA
@@ -46,6 +49,9 @@ struct _UIRES UIRES={
 			_T("values:string"),
 			_T("values:color"),
 			_T("values:skin"),
+		},
+		{
+			_T("icon:app_ico"),
 		},
 	};
 #else
