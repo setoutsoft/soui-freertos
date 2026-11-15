@@ -227,6 +227,39 @@ SOUI_SIM_ICONPROBE=1 SDL_VIDEODRIVER=dummy ./soui_sim.exe
 字形的右边距，不允许"少画一段"）。它跑在 `SApplication` 之前，所以是不依赖
 窗口的纯 GDI 检查；图标自检同理，只看资源块。
 
+### 裸机目标（soui_fr / QEMU）的图标显示现状
+
+上面的图标自检在 **soui_sim（宿主模拟器）** 上全链通过，证明 `ICON:` 的
+资源读取与解码路径（`RT_GROUP_ICON` → `CreateIconFromResource` →
+`LoadImageA` → `DrawIconEx`）在本端口是通的。
+
+更进一步：soui_sim 跑**完整窗口**（`dlg_main.xml` 含
+`<icon src="APP_ICON:16">`）时，`SIconWnd` 持真实 `HICON` 的渲染路径也正常——
+不再是 headless 探针、而是真窗口合成。无头跑
+（`SDL_VIDEODRIVER=dummy SOUI_SIM_DUMP_FRAME=1 SOUI_SIM_AUTOEXIT=1
+./soui_sim.exe`）dump 出的第 1 帧里，标题栏 `app_logo` 右侧出现 16×16 橙色
+窗口标记（圆角框 + 中间镂空，正是 `res/app.ico` 的"窗口"图样）；像素分析确认
+254 个非背景像素、包围盒 (24,6)–(45,21)。窗口正常
+`CreateEx → UpdateWindow → autoexit`，无任何 `load icon failed` 或崩溃。这把
+"图标能不能在 UI 里出现"在宿主端坐实，与下面裸机挂死形成对照（差异在裸机
+cairo framebuffer 渲染，而非资源 / `LoadImage` / `CreateIconFromResource` API）。
+
+`soui_fr`（裸机 ARM / QEMU mps2-an385）这边，`mem_res_provider.cpp` 已经把
+`ICON:APP_ICON` 接好：`res/app.ico` 经 `gen_app_icon_h.py` 生成
+`app_icon_data.h` 字节数组，由 `LoadIcon()` 自行解析 `.ico` 文件目录（16 字节
+目录项、末 4 字节是文件内偏移，与 PE 的 14 字节 + 2 字节 `wResId` 不同，不能直接
+套 `LookupIconIdFromDirectoryEx` 的返回值做索引），挑最匹配帧后用
+`CreateIconFromResource` 造出 `HICON`。`LoadIcon` 本身在裸机上**不会挂**。
+
+但 `SIconWnd` 一旦持有一个真实 `HICON`，就会在 `SHostWnd::CreateEx` 期间
+（布局测量 `MeasureContent → GetIconInfo`，以及之后的 `DrawIconEx`）在裸机
+cairo framebuffer 上**挂死**（QEMU 在 `CreateEx` 之后不再有任何输出，也无
+`*** STACK OVERFLOW ***`，是 SIconWnd/图标的渲染路径问题，与上面的资源读取
+API 实现无关）。因此 `soui_fr` 的冒烟测试布局目前**不含 `<icon>` 元素**，
+只用文字与色块验证字体与基础 UI；图标 API 实现保留就绪，待 SIconWnd 的裸机
+渲染路径排掉后再把元素加回布局。排查需要 QEMU + GDB 跟 `SIconWnd` 对
+`HICON` 的使用，建议作为后续独立任务。
+
 ## 调试与排障
 
 - **无窗口 / 秒退（`0xc0000139`，进不了 `main()`）**：PATH 里另一套 MinGW（PortableGit / Android platform-tools / xampp）的 `libwinpthread-1.dll` / `zlib1.dll` / `libiconv-2.dll` 影子掉了 exe 旁边的同名 DLL。`SOUI_FR_USE_SYSTEM_DEPS=ON` 构建会自动把运行时 DLL 收拢到 exe 同级（exe 目录优先级最高），或把冲突目录从 PATH 移除。
@@ -343,3 +376,7 @@ swinx 里判断"是不是 FreeRTOS 平台 / 有没有宿主 OS / 内核原语从
   分支在本端口未验证，测试图标故意用未压缩的 32bpp DIB 分帧。
 - **光标仍然不绘制**：`LoadCursor` 走 `CursorMgr`，帧缓冲路径没有指针图元；
   `cursoricon.cpp` 只补了图标侧。`DestroyCursor` 仍是空实现。
+- **`soui_fr` 裸机目标暂不在 demo 里渲染图标**：`ICON:` 资源与 `LoadIcon`
+  已实现并验证（见"裸机目标的图标显示现状"），但 `SIconWnd` 持真实 `HICON` 在
+  裸机 cairo framebuffer 上 `CreateEx` 挂死，属图标渲染路径问题，未包含在
+  当前冒烟测试布局中。
