@@ -12,11 +12,14 @@
  * a ~250-line direct esp_driver_spi / esp_driver_i2c implementation is both
  * smaller and free of the LVGL component tree.
  *
- * All transfers are synchronous (spi_device_polling_transmit) and run on the
- * UI task.  PSRAM and flash share one SPI bus, so this must never be called
- * from an ISR.
+ * Register/command writes are synchronous (spi_device_polling_transmit);
+ * bulk pixel pushes use two asynchronous DMA chunks queued on the same
+ * device, so the CPU can byte-swap the next chunk while the previous one is
+ * on the wire.  All of it runs on the UI task -- PSRAM and flash share one
+ * SPI bus, so this must never be called from an ISR.
  */
 #include "soui_board.h"
+#include "framebuffer.h" // SwinxFbInit() -- panel size for the software fb
 
 #include "esp_err.h"
 #include "esp_heap_caps.h"
@@ -61,40 +64,98 @@ i2c_master_dev_handle_t s_touchDev = NULL;
 bool s_lcdReady = false;
 bool s_touchReady = false;
 
-// Staging buffer for the bulk pixel push.  It MUST live in internal RAM: SPI
-// DMA cannot use a PSRAM buffer as source on this part, while the RGB565 rect
-// handed to soui_board_lcd_flush() does live in PSRAM.
+// Route (1): two DMA staging chunks.  While one is on the wire the CPU fills
+// the other, so the RGB565 byte-swap overlaps the bus transfer.  They MUST
+// live in internal RAM: SPI DMA cannot use a PSRAM buffer as source on this
+// part, while the framebuffer handed to soui_board_lcd_flush_strided() does.
 const size_t kFlushChunkBytes = 8192;   // 4096 pixels
-uint8_t *s_chunk = NULL;
+const int    kNumChunks = 2;
+uint8_t *s_chunks[kNumChunks] = {NULL, NULL};
+spi_transaction_t s_trans[kNumChunks] = {};
+bool s_inflight[kNumChunks] = {false, false};
 
 // Diagnostics: total time spent inside the SPI push, so app_main can report
 // "ms per frame" and tell a rendering bottleneck from a bus bottleneck.
 volatile uint64_t s_flushUs = 0;
 volatile uint32_t s_flushRects = 0;
 
-uint8_t *ensure_chunk_buf()
+uint8_t *ensure_chunk_buf(int idx)
 {
-    if (!s_chunk)
+    if (!s_chunks[idx])
     {
-        s_chunk = (uint8_t *)heap_caps_malloc(kFlushChunkBytes,
-                                              MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-        if (!s_chunk)
-            ESP_LOGE(kTag, "cannot allocate %u-byte SPI staging buffer",
-                     (unsigned)kFlushChunkBytes);
+        s_chunks[idx] = (uint8_t *)heap_caps_malloc(kFlushChunkBytes,
+                                    MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        if (!s_chunks[idx])
+            ESP_LOGE(kTag, "cannot allocate %u-byte SPI staging buffer #%d",
+                     (unsigned)kFlushChunkBytes, idx);
     }
-    return s_chunk;
+    return s_chunks[idx];
 }
 
-void spi_push(const uint8_t *data, size_t len)
+// Retire exactly one completed transaction, clearing the flag of the buffer it
+// belongs to.  spi_device_get_trans_result() hands back whichever transaction
+// finished first -- it is NOT addressable by buffer -- so the only correct way
+// to wait for a *particular* buffer is to keep draining results until that
+// buffer's own transaction comes back (see wait_chunk).
+void retire_one_blocking()
 {
-    if (!s_spi || len == 0)
+    spi_transaction_t *done = NULL;
+    if (spi_device_get_trans_result(s_spi, &done, portMAX_DELAY) != ESP_OK)
         return;
-    gpio_set_level((gpio_num_t)kPinDc, 1);
-    spi_transaction_t t;
-    memset(&t, 0, sizeof(t));
-    t.length = len * 8;
-    t.tx_buffer = data;
-    spi_device_polling_transmit(s_spi, &t);
+    for (int i = 0; i < kNumChunks; ++i)
+    {
+        if (done == &s_trans[i])
+        {
+            s_inflight[i] = false;
+            return;
+        }
+    }
+}
+
+// Wait until buffer idx is free again (its DMA has finished reading it).
+//
+// The old code popped ONE result and cleared s_inflight[idx] unconditionally.
+// Because the popped result could belong to the other buffer, the two flags
+// drifted out of sync with reality: a buffer could be marked free while the DMA
+// was still streaming it (-> the CPU overwrote bytes mid-transfer) and
+// wait_all_chunks() could return early (-> the next flush raised the DC line for
+// 0x2A while pixel bytes were still on the wire, so the panel swallowed them as
+// commands, corrupting the address window and shifting the whole image).  The
+// visible symptoms were thin colour stripes every ~13 rows plus a wrapped,
+// offset picture.
+void wait_chunk(int idx)
+{
+    // Bounded: every retire_one_blocking() clears at least one flag, and only
+    // kNumChunks transactions can ever be in flight.
+    for (int guard = 0; guard < kNumChunks && s_inflight[idx]; ++guard)
+        retire_one_blocking();
+    s_inflight[idx] = false;
+}
+
+void wait_all_chunks()
+{
+    for (int guard = 0; guard < kNumChunks; ++guard)
+    {
+        bool any = false;
+        for (int i = 0; i < kNumChunks; ++i)
+            any = any || s_inflight[i];
+        if (!any)
+            return;
+        retire_one_blocking();
+    }
+}
+
+void queue_chunk(int idx, size_t used)
+{
+    wait_chunk(idx);   // never overwrite a buffer the DMA is still reading
+    spi_transaction_t *t = &s_trans[idx];
+    memset(t, 0, sizeof(*t));
+    t->length = used * 8;
+    t->tx_buffer = s_chunks[idx];
+    if (spi_device_queue_trans(s_spi, t, portMAX_DELAY) == ESP_OK)
+        s_inflight[idx] = true;
+    else
+        spi_device_polling_transmit(s_spi, t);   // queue exhausted: sync fallback
 }
 
 // One register-read helper for both the probe and the polling path.
@@ -216,11 +277,24 @@ void lcd_init_panel()
             vTaskDelay(pdMS_TO_TICKS(100));
     }
 
-    // CONFIG_LV_DISPLAY_ORIENTATION_LANDSCAPE (index 2) of
-    // ili9341.c's {0x48, 0x88, 0x28, 0xE8} table.
-    const uint8_t madctl = 0x28;
+    // Landscape = the vendor ili9341.c table entry 2 of {0x48,0x88,0x28,0xE8}:
+    // MV (row/column exchange) + BGR, which is what makes a 240x320 glass
+    // report 320x240.
+    //
+    // This is the vendor value and it is correct.  History worth keeping: while
+    // the picture was being torn apart by the SPI DMA chunk sync bug (see
+    // README 11.9), the corrupted frame wrapped the framebuffer's right-hand
+    // edge into the leftmost columns, which *looked* like a left-right mirror
+    // in a 4-quadrant test pattern.  MY was added (0xA8) to "fix" that mirror
+    // and thereby *introduced* a real one.  The objective check that settled it:
+    // dump the framebuffer and read its title bar off-device -- text reads
+    // normally with the close button on the right -- then compare with the photo
+    // of the glass, where the same text is mirrored.  Framebuffer fine + glass
+    // mirrored + 0xA8 in MADCTL => the mirror is ours, so drop MY.
+    const uint8_t madctl = 0x28; // MV | BGR
     lcd_cmd(0x36);
     lcd_data(&madctl, 1);
+    ESP_LOGI(kTag, "MADCTL=0x%02X (landscape, MV|BGR)", madctl);
 
     // CONFIG_LV_INVERT_COLORS=y
     lcd_cmd(0x21);
@@ -283,16 +357,34 @@ extern "C"
 
 void soui_board_lcd_init(void)
 {
+    // Hand the real panel size to the software framebuffer so a different
+    // glass only means changing kLcdW/kLcdH here -- no swinx rebuild.
+    if (SwinxFbInit(kLcdW, kLcdH, NULL) != 0)
+        ESP_LOGE(kTag, "SwinxFbInit(%d,%d) failed", kLcdW, kLcdH);
     lcd_init_panel();
     touch_init();
 }
 
 void soui_board_lcd_flush(int x1, int y1, int x2, int y2, const uint16_t *rgb565)
 {
+    // Legacy tight-rectangle entry point: stride == rect width.
+    soui_board_lcd_flush_strided(x1, y1, x2, y2, rgb565, x2 - x1);
+}
+
+void soui_board_lcd_flush_strided(int x1, int y1, int x2, int y2,
+                                  const uint16_t *rgb565, int stridePx)
+{
     if (!s_lcdReady || !rgb565 || x1 >= x2 || y1 >= y2)
         return;
     if (x1 < 0 || y1 < 0 || x2 > kLcdW || y2 > kLcdH)
         return;
+    if (stridePx < x2 - x1)
+        return;
+
+    // Commands (polling) and pixel DMA share the DC line and the bus.  No
+    // queued pixel transfer from the previous rect may still be in flight
+    // when the first command of this rect goes out.
+    wait_all_chunks();
 
     // First-flush trace + a slow heartbeat: proves the swinx present path
     // really reached the panel instead of silently dropping frames, without
@@ -300,8 +392,8 @@ void soui_board_lcd_flush(int x1, int y1, int x2, int y2, const uint16_t *rgb565
     static uint32_t s_flushCount = 0;
     ++s_flushCount;
     if (s_flushCount == 1 || (s_flushCount % 200) == 0)
-        ESP_LOGI(kTag, "flush #%u rect (%d,%d)-(%d,%d)",
-                 (unsigned)s_flushCount, x1, y1, x2, y2);
+        ESP_LOGI(kTag, "flush #%u rect (%d,%d)-(%d,%d) stride=%d",
+                 (unsigned)s_flushCount, x1, y1, x2, y2, stridePx);
 
     const int w = x2 - x1;
     const int h = y2 - y1;
@@ -324,24 +416,24 @@ void soui_board_lcd_flush(int x1, int y1, int x2, int y2, const uint16_t *rgb565
     lcd_cmd(0x2C);
 
     // Bulk push.  The panel accepts an unbounded pixel stream after 0x2C, so
-    // the whole rect goes out in a handful of large transactions.  The first
-    // version sent one transaction per row, which pays the driver's per-call
-    // overhead (bus lock, DMA descriptor setup, DC toggle) h up to 240 times
-    // for no benefit -- at 40MHz the wire time for 640 bytes is only ~128us.
+    // the whole rect goes out in a handful of large transactions.  Byte order:
+    // the SPI peripheral streams bytes verbatim, so a little-endian uint16_t
+    // would arrive as lo,hi -- swap while copying into the DMA staging chunk.
     //
-    // Byte order: the SPI peripheral streams bytes verbatim, so a little-endian
-    // uint16_t would arrive as lo,hi.  Swap while copying into the staging
-    // buffer instead of doing a second pass over the rect.
-    uint8_t *buf = ensure_chunk_buf();
-    if (!buf)
+    // Route (1): two chunks are queued asynchronously.  Filling chunk B
+    // overlaps the DMA of chunk A, so the byte-swap costs almost no wall time
+    // beyond the wire transfer itself.
+    gpio_set_level((gpio_num_t)kPinDc, 1);
+    int idx = 0;
+    uint8_t *p = ensure_chunk_buf(idx);
+    if (!p)
         return;
 
     const int64_t tStart = esp_timer_get_time();
-    uint8_t *p = buf;
     size_t used = 0;
     for (int row = 0; row < h; ++row)
     {
-        const uint16_t *src = rgb565 + (size_t)row * w;
+        const uint16_t *src = rgb565 + (size_t)row * stridePx;
         for (int i = 0; i < w; ++i)
         {
             const uint16_t v = src[i];
@@ -350,14 +442,27 @@ void soui_board_lcd_flush(int x1, int y1, int x2, int y2, const uint16_t *rgb565
             used += 2;
             if (used >= kFlushChunkBytes)
             {
-                spi_push(buf, used);
+                queue_chunk(idx, used);
+                idx ^= 1;
+                // The buffer we are about to fill was used two chunks ago and
+                // its DMA may still be reading it.  queue_chunk() only waits
+                // for the buffer it is *sending*, so the wait has to happen
+                // here, before the first byte is written.
+                wait_chunk(idx);
+                p = ensure_chunk_buf(idx);
+                if (!p)
+                {
+                    wait_all_chunks();
+                    return;
+                }
                 used = 0;
-                p = buf;
             }
         }
     }
     if (used)
-        spi_push(buf, used);
+        queue_chunk(idx, used);
+    // The next present issues commands; drain the pixel stream before return.
+    wait_all_chunks();
 
     s_flushUs += (uint64_t)(esp_timer_get_time() - tStart);
     ++s_flushRects;

@@ -1,5 +1,5 @@
 /*
- * swinx_test/main_dump.cpp
+ * soui_fr/selftest/t_dump.cpp
  *
  * Semihosting framebuffer dump: runs the real core window path (create ->
  * cairo paint -> commitCanvas -> software framebuffer) and then dumps the

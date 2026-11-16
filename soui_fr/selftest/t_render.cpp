@@ -1,5 +1,5 @@
 /*
- * swinx_test/main_render.cpp
+ * soui_fr/selftest/t_render.cpp
  *
  * Framebuffer renderer test: drives the REAL core window path on FreeRTOS --
  * RegisterClassA -> CreateWindowExA -> InitWndDC (CreateWindowSurface, cairo

@@ -60,7 +60,7 @@ extern "C" const unsigned char _binary_soui_coff_o_end[];
 static const HINSTANCE kAppInstance = (HINSTANCE)1;
 
 // ---------------------------------------------------------------------------
-// framebuffer dump via ARM semihosting (from swinx_test/main_dump.cpp)
+// framebuffer dump via ARM semihosting (same recipe as selftest/t_dump.cpp)
 // ---------------------------------------------------------------------------
 #define SH_SYS_OPEN 0x01
 #define SH_SYS_CLOSE 0x02

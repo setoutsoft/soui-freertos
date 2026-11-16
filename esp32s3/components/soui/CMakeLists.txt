@@ -18,8 +18,9 @@
 #  3. The STL shim directory stl/ is deliberately NOT on the include path:
 #     it contains headers literally named "mutex", "thread",
 #     "condition_variable", ... which would shadow IDF's libstdc++ ones.
-#     winobjs.cpp / sysbridge.cpp still #include "swinx_freertos_api.h", so a
-#     forwarding header is generated in GEN_DIR instead.
+#     winobjs.cpp and the split platform TUs still #include
+#     "swinx_freertos_api.h", so a forwarding header is generated in GEN_DIR
+#     instead.
 # =============================================================================
 
 # IDF evaluates a component's CMakeLists TWICE: once in a standalone
@@ -89,14 +90,19 @@ file(GLOB SWINX_CMNCTL_SRCS
 set(SWINX_PLATFORM_SRCS
     "${SWINX_DIR}/src/platform/freertos/SConnection.cpp"
     "${SWINX_DIR}/src/platform/freertos/atoms.cpp"
-    "${SWINX_DIR}/src/platform/freertos/sysbridge.cpp"
+    # The 1.4k-line sysbridge.cpp is split by the Win32 DLL surface it fills.
+    "${SWINX_DIR}/src/platform/freertos/memory.cpp"
+    "${SWINX_DIR}/src/platform/freertos/fileapi.cpp"
+    "${SWINX_DIR}/src/platform/freertos/sysapi.cpp"
     "${SWINX_DIR}/src/platform/freertos/input.cpp"
     "${SWINX_DIR}/src/platform/freertos/dlfreertos.cpp"
     "${SWINX_DIR}/src/platform/freertos/dlghelper.cpp"
     "${SWINX_DIR}/src/platform/freertos/syncapi.cpp"
-    # Win32 entry points richedit41 calls that the shim does not model
-    # (clipboard -> SConnection, IME/OLE/file inert).  Only this component
-    # compiles it: on a host build the real user32/kernel32 must win.
+    # Win32 entry points the shim does not model (clipboard -> SConnection,
+    # IME/OLE/file inert).  <edit> no longer needs them (see the SEditLite note
+    # above), but the surface is what any Win32 library compiled into this
+    # component would call, so it stays linked.  Only this component compiles
+    # it: on a host build the real user32/kernel32 must win.
     "${SWINX_DIR}/src/platform/freertos/win32_rich.cpp"
     "${SWINX_DIR}/src/platform/freertos/winobjs.cpp"
     # The icon/cursor loader (Wine-derived .ico/.cur/.ani reader): LoadImageW/A,
@@ -105,6 +111,11 @@ set(SWINX_PLATFORM_SRCS
     # SWINX_NO_MMAP (no mmap on bare metal; icons arrive through the resource
     # blob) and SWINX_OWN_USER32 (see the definition below).
     "${SWINX_DIR}/src/platform/posix/cursoricon.cpp")
+
+# 与 POSIX 家族共用的中立层：消息泵（GetMessage/PeekMessage，含 WinEvent 排空）、
+# QueryPerformanceCounter、码表转换。这三个都不再在 posix/sysapi.cpp 或
+# freertos 目录里各写一份，漏掉这个 glob 会直接链接报错。
+file(GLOB SWINX_COMMON_SRCS "${SWINX_DIR}/src/platform/common/*.cpp")
 
 set(SWINX_GDI_SRCS
     "${SWINX_DIR}/src/gdi/cairo/gdi.cpp"
@@ -178,46 +189,25 @@ set(IMGDEC_SRCS
     "${AUPNG_DIR}/src/upng_decode.c"
     "${AUPNG_DIR}/src/upng_inflate.c")
 
-# ---- richedit41: the text engine behind <edit> / SRichEdit ------------------
-# SRichEdit::OnCreate() gets its text service from CreateTextServices().  On a
-# desktop build that symbol is dlopen()'d out of the system Msftedit.dll; a bare
-# target has neither dlopen nor a system richedit, so the vendored engine is
-# linked in and SRichEdit.cpp takes its INIT_RICHEDIT branch.
+# ---- <edit>: lightweight SEditLite, richedit41 is NOT compiled --------------
+# <edit> used to be backed by the vendored richedit41 + msls31 here: ~250
+# translation units of 2001-era Win32 C++ that pushed the app image past 4MB
+# (hence the 6MB partition) and cost most of the 15~20 minute clean build.
+# SOUI now ships a self-contained plain-text implementation (SEditLite.cpp,
+# selected with SOUI_EDIT_LITE -- see SOUI/include/control/SEdit.h) with the
+# same XML attribute surface and the same IEdit interface, so the control was
+# switched over and the engine unlinked.  Rich text (RTF, char-level
+# formatting) is the only thing lost; this board has no keyboard and no IME to
+# edit it with anyway.
 #
-# The source list / defines / include order mirror
-# <soui-freertos>/cmake/SouiFreeRTOS.cmake:561-676 (the host+wasm recipe):
-#   * re41/*.cpp minus lbhost/cbhost/w32win32/cuim (Win32 OLE + UI-manager
-#     halves that re41/CMakeLists.txt itself comments out),
-#   * lssrc/*.c -- the vendored msls31 (line services), which re41 needs to lay
-#     out text; the host build links it as a separate library,
-#   * the empty generated config.h that reinit.cpp #includes.
-#
-# Two things are ESP-IDF specific:
-#   * swinx/include must precede inc41/ in the include order so that _common.h's
-#     "imm.h" resolves to swinx's shim instead of the SDK-flavoured
-#     inc41/imm.h (two type systems otherwise -- same trap the wasm build hit).
-#   * -U_WIN32 is NOT needed: that trick exists only because MinGW hosts define
-#     _WIN32 and the engine's COM branches then want symbols swinx does not
-#     model.  Xtensa newlib never defines it.
-set(RICHEDIT_DIR "${SOUI_ROOT}/third-part/richedit41")
-set(RICHEDIT_GEN "${CMAKE_CURRENT_BINARY_DIR}/gen/richedit")
-file(MAKE_DIRECTORY "${RICHEDIT_GEN}")
-file(WRITE "${RICHEDIT_GEN}/config.h"
-     "/* generated by components/soui/CMakeLists.txt: richedit41 feature toggles\n"
-     " * come from the -D list below, exactly like the wasm build. */\n")
-
-file(GLOB RICHEDIT_SRCS "${RICHEDIT_DIR}/re41/*.cpp")
-foreach(_f lbhost cbhost w32win32 cuim)
-    list(REMOVE_ITEM RICHEDIT_SRCS "${RICHEDIT_DIR}/re41/${_f}.cpp")
-endforeach()
-file(GLOB MSLS31_SRCS "${RICHEDIT_DIR}/lssrc/*.c")
+# Remove SOUI_EDIT_LITE from target_compile_definitions below (and re-add the
+# richedit41 source/include block from git history) to go back.
 
 idf_component_register(
     SRCS
         ${SWINX_CORE_SRCS} ${SWINX_CMNCTL_SRCS}
-        ${SWINX_PLATFORM_SRCS} ${SWINX_GDI_SRCS}
+        ${SWINX_PLATFORM_SRCS} ${SWINX_COMMON_SRCS} ${SWINX_GDI_SRCS}
         ${UTIL_SRCS} ${RENDERGDI_SRCS} ${IMGDEC_SRCS}
-        ${RICHEDIT_SRCS} ${MSLS31_SRCS}
         "${SOUI_DIR}/src/SApp.cpp"
         "${SOUI_DIR}/src/SouiFactory.cpp"
         ${SOUI_CORE_SRCS} ${SOUI_RESMGR_SRCS} ${SOUI_HELPER_SRCS}
@@ -249,13 +239,6 @@ idf_component_register(
         "${STB_DIR}"
         "${AUPNG_DIR}/include"
         "${AUPNG_DIR}/src"
-        # richedit41 -- after SWINX_DIR/include on purpose (see the block above)
-        "${RICHEDIT_GEN}"
-        "${RICHEDIT_DIR}/tom41"
-        "${RICHEDIT_DIR}/lsinc"
-        "${RICHEDIT_DIR}/inc41"
-        "${RICHEDIT_DIR}/inci"
-        "${RICHEDIT_DIR}/re41"
     REQUIRES
         soui_cairo
         freertos
@@ -275,18 +258,26 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     SOUI_FREERTOS_REAL
     SOUI_PLATFORM_ESPIDF
     SOUI_ENABLE_SVG
+    # <edit> = SEditLite (SOUI/src/control/SEditLite.cpp) instead of the
+    # RichEdit-backed SRichEdit.  PUBLIC is mandatory: the macro changes the
+    # class definition of SEdit, so main/ (which includes SouiCtrls.h) has to
+    # see the same value or the two sides disagree on the vtable layout.
+    SOUI_EDIT_LITE
     ENABLE_THUNK=0
-    # Per-frame profiling: when 1, SHostWnd::OnPrint() and SWindow::DispatchPaint()
-    # print a [prof] breakdown (layout / render phases / present / per-window
-    # cost) to the console every 20 frames.  Keep it 0 for normal builds -- the
-    # printf traffic alone costs ~1.5ms per frame at 115200 baud.
-    SOUI_PORT_PROFILE=0
     # swinx/src/uniconv.h: derive wchar_t size from the toolchain (4 on
     # Xtensa newlib), never from a hand-written constant.
     WCHAR_SIZE=__SIZEOF_WCHAR_T__
     # NOTE: ESP-IDF's xTaskCreate() stack depth is measured in BYTES, not
-    # FreeRTOS "words". 16KB per swinx-created task is the default here.
-    SWINX_FR_DEFAULT_STACK_WORDS=16384)
+    # FreeRTOS "words" (the macro name is historical).
+    #
+    # 11.10 correction: raising this from 16KB to 32KB did NOT fix the
+    # "A stack overflow in task soui_ui" panic -- it only looked like it,
+    # because 32KB happened to survive the run being watched.  This macro is
+    # the default stack for helper tasks swinx creates internally; the UI task
+    # gets its stack from kUiTaskStackBytes in main/app_main.cpp, and that is
+    # the one the paint recursion overflows.  Kept at 32KB (ample for the helper
+    # tasks, and the old 16KB was genuinely tight for them).
+    SWINX_FR_DEFAULT_STACK_WORDS=32768)
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     SOUI_EXPORTS
     # cursoricon.cpp (LoadImageW/A, CreateIconFromResource) is a POSIX-platform
@@ -321,30 +312,3 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
 # COMPILE_DEFINITIONS flag instead.
 set_source_files_properties("${SOUI_DIR}/src/control/SViewBase.cpp" PROPERTIES
     COMPILE_DEFINITIONS "SOUI_FR_INCLUDE_SOUISTD=1")
-
-# ---- richedit41 per-source flags -------------------------------------------
-# -D list copied from re41/CMakeLists.txt: UNICODE but NOT _UNICODE (re41's
-# _common.h defines _UNICODE itself at line 29 and swinx's <tchar.h> keys
-# LPCTSTR off it, so the two agree only if _common.h is read first), and every
-# optional subsystem (complex scripts, private messages, ANSI windows, version
-# info, list combo boxes, metafiles, accessibility, ink) switched off so the
-# engine does not reach for APIs the shim does not model.
-#
-# -fpermissive: this is 2001-era C++ compiled as gnu++17 (the component-wide
-# standard).  It truncates HKL to a WORD (cmsgflt.cpp) and uses constructs later
-# standards reject as errors; nothing here is worth fixing in vendored code.
-set_source_files_properties(${RICHEDIT_SRCS} PROPERTIES
-    COMPILE_DEFINITIONS
-        "_CRT_SECURE_NO_WARNINGS;UNICODE;NODELAYLOAD;NOCOMPLEXSCRIPTS;NOPRIVATEMESSAGE;NOANSIWINDOWS;NOVERSIONINFO;NOLISTCOMBOBOXES;NOMETAFILES;NOACCESSIBILITY;NOINKOBJECT"
-    COMPILE_OPTIONS "-w;-fpermissive")
-
-# lssrc/CMakeLists.txt compiles these with -D_NO_WINDOWS; keep that, or the
-# line-services code tries to reach the Win32 GDI text APIs directly.
-set_source_files_properties(${MSLS31_SRCS} PROPERTIES
-    COMPILE_DEFINITIONS "_CRT_SECURE_NO_WARNINGS;_NO_WINDOWS")
-
-# SRichEdit.cpp only: switches OnCreate() from dlopen("Msftedit.dll") to the
-# statically linked CreateTextServices(), and drops its own weak IID copies so
-# the engine's strong ones are used (see the comment at SRichEdit.cpp:254).
-set_source_files_properties("${SOUI_DIR}/src/control/SRichEdit.cpp" PROPERTIES
-    COMPILE_DEFINITIONS "INIT_RICHEDIT=1")

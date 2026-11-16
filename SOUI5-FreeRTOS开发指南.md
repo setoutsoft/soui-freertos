@@ -3,7 +3,7 @@
 > **覆盖范围**：构建体系、QEMU/裸机参考工程、Windows 宿主模拟器、应用开发流程、坑速查。
 > **工程位置**：soui4 仓库的 git 子模块 `soui-freertos`（`git submodule update --init soui-freertos`，origin = `https://gitee.com/setoutsoft/soui-freertos.git`），子模块路径 `/d/work/soui4/soui-freertos`。
 > **名称**：对外产品名 **SOUI5**（5.x 线），源码目录仍叫 `soui4`。
-> **验证状态**：已通过 `soui_sim`、`templates/app` 全量构建与启动，`swinx_test` 交叉编译 + QEMU 实跑验证（结果见 §3.2、§4.3）。
+> **验证状态**：已通过 `soui_sim`、`templates/app` 全量构建与启动，`soui_fr` 两个镜像（`soui_fr.elf` / `soui_fr_selftest.elf`）交叉编译 + QEMU 实跑验证（结果见 §3.1、§3.3、§4.3）。
 
 ---
 
@@ -31,6 +31,7 @@ SOUI5 的跨平台策略是"应用层写 Win32，平台差异由 swinx 吸收，
 | SOUI 核心编译（core + control + activex 全量） | ✅ 100% 可编译 | `arm-none-eabi-gcc` 13.3 / cortex-m3 / `-Os` |
 | SOUI 核心链接 | ✅ 0 未定义符号 | `soui_fr` census 链接（§3.3） |
 | 完整 SApp + XML 布局渲染（QEMU） | ✅ 出图目检通过 | `soui_fr` 真跑 SApp |
+| `<edit>` 控件（轻量 `SEditLite`，不链 richedit41） | ✅ 可编辑纯文本 | `soui_sim` 目检（§2.1 的 `SOUI_FR_EDIT_LITE`） |
 | Windows 宿主模拟器 | ✅ 出图 + 鼠标交互 | `soui_sim`（§4） |
 
 ### 1.3 分层架构
@@ -45,7 +46,7 @@ flowchart TB
     end
     subgraph SWINX["swinx（Win32 兼容层）"]
         C1["Win32 API: CreateWindow / BeginPaint / FillRect / GetTickCount ..."]
-        C2["platform/freertos<br/>SConnection(消息泵) · winobjs · framebuffer(cairo) · input · sysbridge"]
+        C2["platform/freertos<br/>SConnection · winobjs · framebuffer(cairo) · input · memory/fileapi/sysapi"]
         C3["platform/freertos/stl<br/>&lt;mutex&gt; &lt;thread&gt; &lt;condition_variable&gt; 覆盖头"]
     end
     subgraph RT["FreeRTOS 内核"]
@@ -65,7 +66,7 @@ flowchart TB
 | 载体 | 跑什么 | 什么时候用 | 局限 |
 |---|---|---|---|
 | `soui_sim`（Windows 宿主） | 同一份 swinx freertos 层 + 同一份 app 代码，出图换 SDL2 | 日常迭代：改 XML / 控件 / 应用逻辑，秒级重编 + 直接鼠标交互 | 验证不了裸机启动链、内存布局、真实时序（§4.7） |
-| QEMU mps2-an385（`swinx_test` / `soui_fr` / `demo`） | 交叉编译的 Cortex-M3 镜像 | 交付前必过：裸机启动链、堆锁、链接脚本、无 OS 依赖 | 慢（交叉编译 + semihosting dump），交互只能靠注入 |
+| QEMU mps2-an385（`soui_fr` 的 `soui_fr.elf` + `soui_fr_selftest.elf`） | 交叉编译的 Cortex-M3 镜像 | 交付前必过：裸机启动链、堆锁、链接脚本、无 OS 依赖 | 慢（交叉编译 + semihosting dump），交互只能靠注入 |
 | 目标板 | 换 uart 驱动 + 链接脚本 + LCD 控制器 | 交付 | 手上有板子才谈得上 |
 
 推荐顺序：**模拟器迭代到功能稳定 → QEMU 跑通 → 目标板**。
@@ -74,14 +75,38 @@ flowchart TB
 
 ## 2. 构建体系
 
-### 2.1 唯一入口：`cmake/soui.cmake`
+### 2.1 机制层 + 工程入口
 
-新工程的整个构建系统就是下面两行（`templates/app/CMakeLists.txt` 除 `project()` / 编译标准外无其它内容）：
+构建体系分两层，2026-11-16 起各工程的差异不再挤进同一个文件：
+
+| 位置 | 角色 |
+|---|---|
+| `<工程>/cmake/project.cmake` | **工程入口**。这个工程怎么编全在这里：`COMPONENTS`、源文件、任务栈、`<edit>` 实现、系统 cairo、资源目录、额外 `-D`/`-O`、输出名。`<工程>/CMakeLists.txt` 只剩 `project()` + `include(cmake/project.cmake)` |
+| `cmake/soui.cmake` | **机制**：定位环境、`include` 依赖描述、提供 `soui_fr_project()` / `soui_fr_add_resources()` / `soui_fr_add_sim_host()`；不含任何工程取值 |
+| `cmake/SouiFreeRTOS.cmake` | **依赖描述**：cairo/pixman/libpng/zlib、swinx、SOUI、FreeRTOS 内核 → INTERFACE targets。文件头列着"工程可覆盖项" |
+
+新工程的构建系统就是下面三段（`templates/app` 复制即用）：
 
 ```cmake
+# CMakeLists.txt
+project(hello C CXX)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/project.cmake)
+
+# cmake/project.cmake
+set(SOUI_FR_CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/config")
+set(SOUI_FR_STACK_WORDS 32768)
 include(<soui-freertos>/cmake/soui.cmake)
-soui_fr_project(hello SOURCES main.cpp SIM_HOST)   # 裸机则去掉 SIM_HOST
+soui_fr_project(hello SOURCES main.cpp COMPONENTS all SIM_HOST)   # 裸机去掉 SIM_HOST
 ```
+
+工程可覆盖的变量（在 `project.cmake` 里 `include` 之前 `set()`）：`SOUI_FR_CONFIG_DIR`（必填）、`SOUI_FR_STACK_WORDS`、`SOUI_FR_PORT_DIR`、`SOUI_FR_EDIT_LITE`、`SOUI_FR_USE_RICHEDIT`、`SOUI_FR_USE_SYSTEM_DEPS`、`SOUI_FR_WARNINGS`、`SOUI_FR_DEFINITIONS` / `SOUI_FR_COMPILE_OPTIONS`（挂 `soui_fr_platform`，整棵树都吃到）、`SOUI_FR_SWINX_PLATFORM_SRCS`。
+
+`<edit>` 默认走**轻量自绘实现**：`SOUI_FR_EDIT_LITE` 默认 `ON`，它给 `soui4_fr`（PUBLIC，所以应用 TU 也吃到）
+定义 `SOUI_EDIT_LITE`，编译 `SOUI/src/control/SEditLite.cpp`、把 `SRichEdit.cpp` 编成空 TU，**不编也不链
+richedit41**（省掉 ~250 个 2001 年代 Win32 C++ 源文件，这是整个构建里最长的一段）。公开的 `SEdit` /
+`IEdit` 接口与 XML 属性面不变，`<combobox>`、`SMaskEdit`、`SDateTimeEdit` 这些依赖方不用改；
+富文本（RTF、字符级格式、竖排、IME 组字下划线、拖放）是有意的 no-op。要回到 RichEdit 版：
+`SOUI_FR_EDIT_LITE OFF` + `SOUI_FR_USE_RICHEDIT ON`（仅宿主构建成立）。两个开关互斥，`EDIT_LITE` 优先。
 
 `soui_fr_project()` 一次做完：
 
@@ -94,7 +119,7 @@ soui_fr_project(hello SOURCES main.cpp SIM_HOST)   # 裸机则去掉 SIM_HOST
 | 资源 | `uires/uires.idx` → uiresbuilder → windres COFF → `.incbin` 数据段（§2.6） |
 | 宿主 | `SIM_HOST` 时链 `sim/soui_sim_hal.cpp`；Windows system-deps 构建把运行时 DLL 收拢到 exe 同级（§4.3） |
 
-参数全部可选：`SOURCES`（必填）、`RESOURCES`（默认 `./uires`）、`RESOURCE_SCRIPT`、`NO_RESOURCES`、`FREERTOS_CONFIG`（默认 `./config`）、`SIM_HOST`、`INCLUDES`、`LIBRARIES`、`OUTPUT_NAME`。
+参数：`SOURCES`（必填）、`COMPONENTS`（默认 `all`；`swinx` = 只要平台层，见 `soui_fr` 的 selftest target）、`RESOURCES`（默认 `./uires`）、`RESOURCE_SCRIPT`、`NO_RESOURCES`、`FREERTOS_CONFIG`、`SIM_HOST`、`INCLUDES`、`LIBRARIES`、`DEFINITIONS`/`COMPILE_OPTIONS`/`LINK_OPTIONS`（只作用于应用目标）、`OUTPUT_NAME`。
 
 需要更细控制时底层仍然可用：`soui_fr_add_all()` + `soui_fr_link_app(<target>)`，以及 `soui_fr::thirdparty` / `::swinx` / `::soui` / `::freertos` / `::app` 这些 INTERFACE target（定义在 `cmake/SouiFreeRTOS.cmake`）。
 
@@ -131,25 +156,36 @@ SOUI/utilities 侧的用法（同一语义，不同判据）：
 
 ```
 soui-freertos/                    # soui4 的 git 子模块
-├── cmake/
-│   ├── soui.cmake                # ★ 唯一公共入口（soui_fr_project / soui_fr_add_resources / soui_fr_add_sim_host）
+├── cmake/                        # 机制层：各工程共用
+│   ├── soui.cmake                # 环境 + 三个函数（soui_fr_project / add_resources / add_sim_host）
 │   ├── SouiFreeRTOS.cmake        # 依赖描述：kernel/swinx/SOUI/cairo... 的 INTERFACE target
 │   ├── CopyRuntimeDlls.cmake     # system-deps 构建的 DLL 收拢
 │   └── soui_fr_compat.h          # 强制预包含的兼容头
 ├── sim/soui_sim_hal.{h,cpp}      # SDL2 宿主壳：窗口 / ARGB 纹理 / 鼠标键盘注入
-├── templates/app/                # 复制即用的新工程模板（CMakeLists + main.cpp + config + uires）
+├── templates/app/                # 复制即用的新工程模板（CMakeLists + cmake/project.cmake + main.cpp + config + uires）
 ├── soui_sim/                     # ★ Windows 宿主模拟器 demo（§4）
-├── demo/                         # 最小 FreeRTOS 基座：startup / syscalls / uart / FreeRTOSConfig / 链接脚本 / 工具链
-│   └── cmake/toolchain-arm-freertos.cmake
-├── swinx_test/                   # swinx 平台层单测（6 个 main_*.cpp，QEMU 实跑）
-├── soui_fr/                      # SApp 冒烟（QEMU 真出图）；与 soui_sim 同一套 soui.cmake，只多工具链与板级文件
+│   ├── build.sh / build.bat      #   ← 环境探测 + configure + build（+ --run）
+│   └── cmake/project.cmake       #   ← 本工程入口：COMPONENTS all / 栈 32768 / `<edit>`=SEditLite / SIM_HOST
+├── soui_fr/                      # ★ 裸机参考工程（QEMU mps2-an385），一个工程两个 ELF
+│   ├── build.sh / build.bat      #   ← 同上，另加 --run [app|selftest] / --census，找 arm 工具链 + qemu
+│   ├── board/                    #   板级基座：startup.c / syscalls.c / uart.h
+│   │   └── mps2/                 #   uart_mps2.c / FreeRTOSConfig.h / mps2-an385.ld
+│   ├── cmake/                    #   project.cmake（本工程入口）+ toolchain-arm-freertos.cmake
+│   ├── soui_app.cpp              #   完整 SApp：XML → 控件树 → cairo → LCD fb → 半主机 dump
+│   └── selftest/                 #   swinx 平台层自测（t_conn / t_render / t_input / t_dump / t_sysapi）
 ├── FreeRTOS-Kernel/              # vendored 官方内核（ARM_CM3 + MSVC-MingW 两个 port）
 └── README.md
 ```
 
+原本还有 `demo/`（裸机最小基座）与 `swinx_test/`（平台层单测）两个独立工程，2026-11 已合并：
+`demo/` 的板级文件整体搬进 `soui_fr/board/`，`swinx_test/` 里那几条**桌面侧没有等价物**的用例
+（`SConnection` 消息泵、framebuffer 提交、`SwinxInject*` 注入、半主机 dump、sysapi 语义）搬进
+`soui_fr/selftest/` 作为第二个 target（`SOUI_FR_SELFTEST=ON`，默认开）；同步原语 / 线程 / 临界区
+那几条本来就抄自 `demos/fun_test`，留在桌面侧每次构建都跑。
+
 ### 2.4 工具链与 include 顺序
 
-`demo/cmake/toolchain-arm-freertos.cmake` 的关键点：
+`soui_fr/cmake/toolchain-arm-freertos.cmake` 的关键点：
 
 ```cmake
 set( CMAKE_SYSTEM_NAME Generic )
@@ -244,81 +280,92 @@ uires/uires.idx ──uiresbuilder──> resource.h + .rc  ──windres──>
 
 ## 3. QEMU / 裸机参考工程
 
-三个工程都跑在 QEMU **mps2-an385**（Cortex-M3）上，共用一个 vendored 内核与同一套工具链文件。
+QEMU **mps2-an385**（Cortex-M3）上是 `soui_fr` 一个工程、两个镜像，共用 vendored 内核与 `soui_fr/cmake/toolchain-arm-freertos.cmake`：
 
-### 3.1 `demo` —— 最小 FreeRTOS 基座
+| 镜像 | 开关 | 内容 |
+|---|---|---|
+| `soui_fr.elf` | 总是编 | 完整 SApp 冒烟：XML → 控件树 → cairo → LCD fb → 半主机 dump |
+| `soui_fr_selftest.elf` | `SOUI_FR_SELFTEST`（默认 `ON`） | swinx 平台层自测：消息泵 / 渲染提交 / 输入注入 / dump / sysapi 语义 |
 
 ```bash
-cd /d/work/soui4/soui-freertos/demo
-cmake -S . -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-arm-freertos.cmake
-cmake --build build                 # build/demo.elf + demo.hex
-qemu-system-arm -M lm3s6965evb -nographic -kernel build/demo.elf
+cd soui-freertos/soui_fr
+./build.sh --run              # 构建 + 两个镜像各跑一遍 + 校验日志标记
+./build.sh --run selftest     # 只跑自测
+./build.sh --no-selftest      # 只要 app 镜像
 ```
 
-只链内核 + 一个 `main.cpp`，用来验证基座（UART、调度器、堆锁）本身。
+两个镜像跑完自己的链路后都进 `for(;;)` 保活，所以判据是日志标记而不是退出码：app 看 `SOUISAPP FREERTOS DONE`，selftest 看 `SOUI_FR SELFTEST PASS`；`build.sh --run` 就是盯着这两个标记、出现即收工（正常 1～3 秒）。
 
-### 3.2 `swinx_test` —— swinx 平台层全量验证
-
-`swinx_test/CMakeLists.txt` 同时也是**可复用的库配方样板**（`soui.cmake` 出现之前，各工程的静态库设置都是从它摘的）。
-
-| 库 | 内容 | 关键设置 |
-|---|---|---|
-| `swinx_core` | swinx `src/*.cpp` + commctrl + `platform/freertos/*` + gdi/cairo 后端 + 字体桥 | 🚨 **不 GLOB `src/platform/posix/`**（POSIX 系统 API 实现全迁到那里，linux/macos/ios/mobile 才编它）；`-include swinx_stl.h` |
-| `cairo_fr` | vendored cairo（image surface + png，排除 ft/quartz/xcb/xlib/pdf/ps/svg） | include 路径带 `platform/freertos`（`cairo-features.h` 桩） |
-| `pixman_fr` | pixman（排除 SIMD 文件） | `PIXMAN_NO_TLS` |
-| `png_fr` / `zlib_fr` | vendored libpng + zlib | — |
+### 3.1 `soui_fr` —— SApp 冒烟（裸机，与 `soui_sim` 同一套机制）
 
 ```bash
-cd /d/work/soui4/soui-freertos/swinx_test
+cd soui-freertos/soui_fr
 cmake -S . -B build -G Ninja \
-    -DCMAKE_TOOLCHAIN_FILE=../demo/cmake/toolchain-arm-freertos.cmake \
-    -DBOARD=mps2                      # mps2（4MB）| lm3s（256KB，只够同步层）
+    -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-arm-freertos.cmake"
 cmake --build build
-
-# 交互观察：串口直出 stdio
-qemu-system-arm -M mps2-an385 -nographic -kernel build/swinx_test.elf
-
-# 需要完整跑完（读日志）：串口写文件
-qemu-system-arm -M mps2-an385 -kernel build/swinx_test.elf \
-    -serial file:C:/temp/qemu.log -display none
-```
-
-测试内容：6 个模块、源码里 **193 处 `CHECK` 断言点**（判据打在 UART）：
-
-| 模块 | 文件 | 覆盖面 |
-|---|---|---|
-| 同步原语 | `main.cpp` / `main_syncobj.cpp` | CS 递归/互斥、SRWLOCK 读写并发、INIT_ONCE、事件/信号量/`std::thread` |
-| SConnection | `main_conn.cpp` | 消息泵、定时器、跨任务 postMsg |
-| 渲染 | `main_render.cpp` | RegisterClass → CreateWindow → WM_PAINT → commitCanvas → 帧缓冲像素断言 |
-| 输入注入 | `main_input.cpp` | `SwinxInjectMouse/Key` → 路由 → 消息队列 → 泵 → wndproc（含 WM_CHAR） |
-| 出图 | `main_dump.cpp` | semihosting dump 整帧 → `fb.ppm`（含像素断言） |
-
-> 🚨 **QEMU "挂死"先查 guest tick 再定性**：`-nographic` 下串口走 stdio 管道，每字符一次 write，打印密集的探针会把 tick 拖到 ~14 次/秒，长等待测试被外部 timeout 杀掉，表象是 exit=124 的"假 hang"。判定：换 `-serial file:` 排除背压。
-> 🚨 **Windows 版 qemu 不认 MSYS 路径**：`-serial file:/tmp/x.log` 会直接 `rc=1` 且不产日志，必须写 `-serial file:C:/Users/.../x.log`。
-
-本工程交叉编译通过（`swinx_test.elf`，9.9MB，未裁剪），QEMU 实跑 **35 项 `OK` / 0 `FAIL`**，末行 `SWINX WINOBJS FREERTOS PASS`，`fb.ppm` 正常落盘（320×240，230415 字节）——裸机路径（`SFR_HOSTED=0`）行为稳定。
-
-### 3.3 `soui_fr` —— SApp 冒烟（裸机，与 `soui_sim` 同一套 `soui.cmake`）
-
-```bash
-cmake -S D:/work/soui4/soui-freertos/soui_fr \
-    -B D:/work/soui4/soui-freertos/soui_fr/build -G Ninja \
-    -DCMAKE_TOOLCHAIN_FILE=D:/work/soui4/soui-freertos/demo/cmake/toolchain-arm-freertos.cmake
-ninja -C D:/work/soui4/soui-freertos/soui_fr/build
-cd D:/work/soui4/soui-freertos/soui_fr/build
+cd build
 qemu-system-arm -M mps2-an385 -kernel soui_fr.elf \
     -serial file:soui_run.log -display none -semihosting     # 出 soui_fb.ppm
 ```
 
-工程自己的 `CMakeLists.txt` 只有 `include(../cmake/soui.cmake)` + `soui_fr_project(...)` 加三段目标专属信息：工具链（命令行给）、板级文件（`../demo/startup.c` / `syscalls.c` / `mps2/uart_mps2.c` + 链接脚本 + `-Wl,--entry=Reset_Handler`）、以及内核源（框架只给宿主构建加内核，裸机由工程自己列 `tasks.c/queue.c/…/ARM_CM3/port.c/heap_3.c`）。
+工程自己的 `cmake/project.cmake` 就是入口（`CMakeLists.txt` 只 `include` 它），里面是本工程专属的三段：工具链（命令行给）、板级文件（`board/startup.c` / `board/syscalls.c` / `board/mps2/uart_mps2.c` + 链接脚本 + `-Wl,--entry=Reset_Handler`，用 `soui_fr_project(... LINK_OPTIONS ...)` 传）、以及内核源（框架只给宿主构建加内核，裸机由工程自己列 `tasks.c/queue.c/…/ARM_CM3/port.c/heap_3.c`）。板级文件与内核源抽成 `BOARD_SRCS` / `KERNEL_SRCS` 两个变量，第二个 target 直接复用。
 
 - 默认 `CMAKE_BUILD_TYPE=MinSizeRel`（`-Os`）。`SOUI_FR_CENSUS=ON` 时关 `--gc-sections`、`--whole-archive` 全留，把全部符号缺口一次性暴露出来（>4MB，**只链不跑**）；`OFF`（默认）是可运行版，SApp 全链路 text ≈2.6MB。
 - 链接范围：`utilities4_fr` + `soui4_fr` + `rendergdi_fr` + `imgdecoder_stb_fr` + `swinx_core` + cairo/pixman/libpng/zlib。排除 `SwndAccessible.cpp`（msaa）、两个 NDK resprovider、`SOhosApp.cpp`（NAPI）；`src/activex` 不参与裸机构建（无 COM/OLE）。
+
+### 3.2 `board/` —— 裸机基座（原 `demo/` 工程）
+
+`demo/` 那个"只链内核 + 一个 main.cpp"的最小工程已经并进来，现在就是 `board/` 这一层。§2.5 讲的是**为什么**要有这四个东西，这里是**在哪**：
+
+| 文件 | 作用 |
+|---|---|
+| `board/startup.c` | CMSIS 向量表 → `Reset_Handler` → `entry()`：`__libc_init_array`、`heap_lock_early_init`，最后调 `main()` |
+| `board/syscalls.c` | newlib 系统调用桩 + `__malloc_lock/__malloc_unlock`（递归锁，§2.5 ①） |
+| `board/uart.h` / `board/mps2/uart_mps2.c` | 串口 stdio（`-nographic` 下就是终端） |
+| `board/mps2/FreeRTOSConfig.h` | 内核配置：堆大小、优先级档位、tick 频率 |
+| `board/mps2/mps2-an385.ld` | 链接脚本：4MB FLASH + 4MB RAM，`.text*/.rodata*` 收进 FLASH |
+
+换板子只换 `board/mps2/` 这一层（uart 驱动、FLASH/RAM 尺寸、`FreeRTOSConfig.h`），上层不动。链接选项在 `project.cmake` 里：`-T board/mps2/mps2-an385.ld -nostartfiles -Wl,--entry=Reset_Handler -Wl,--gc-sections`。
+
+> 原来的 `lm3s6965` 小板随 `demo/` 一起下线了：256KB FLASH 只够跑同步层、跑不了 SOUI，留着容易误导。
+
+### 3.3 `selftest/` —— swinx 平台层自测（原 `swinx_test/` 工程）
+
+这个 target 的入口只有一句 `COMPONENTS swinx`：库配方全部来自共享的依赖描述（`cmake/SouiFreeRTOS.cmake`），本工程不复制源文件清单 —— 以前那样写，swinx 每新增一个 `.cpp` 都要在两个地方同步。
+
+| 库 | 内容 | 关键设置 |
+|---|---|---|
+| `swinx_core` | swinx `src/*.cpp` + commctrl + `platform/freertos/*` + `platform/common/*` + gdi/cairo 后端 + 字体桥 | 🚨 **不 GLOB `src/platform/posix/`**（POSIX 系统 API 实现全迁到那里，linux/macos/ios/mobile 才编它）；`-include soui_fr_compat.h`（内含 `swinx_stl.h`）；`src/*.cpp` 用 `CONFIGURE_DEPENDS` glob |
+| `cairo_fr` | vendored cairo（image surface + png，排除 ft/quartz/xcb/xlib/pdf/ps/svg） | include 路径带 `platform/freertos`（`cairo-features.h` 桩） |
+| `pixman_fr` | pixman（排除 SIMD 文件） | `PIXMAN_NO_TLS` |
+| `png_fr` / `zlib_fr` | vendored libpng + zlib | — |
+
+工程侧只剩"板级 + 内核源 + include 顺序修正"三件事 —— FreeRTOS 的 `include/` 必须排在 `swinx/src` 前面，否则 `list.c` 的 `#include "list.h"` 会命中 `swinx/src/list.h`（Wine 的无关键表）而 `List_t` 未定义。
+
+测试内容：5 个模块、源码里 **132 处 `CHECK` 断言点**（判据打在 UART）：
+
+| 模块 | 文件 | 覆盖面 |
+|---|---|---|
+| SConnection | `selftest/t_conn.cpp` | 消息泵、定时器、跨任务 postMsg |
+| 渲染 | `selftest/t_render.cpp` | RegisterClass → CreateWindow → WM_PAINT → commitCanvas → 帧缓冲像素断言 |
+| 输入注入 | `selftest/t_input.cpp` | `SwinxInjectMouse/Key` → 路由 → 消息队列 → 泵 → wndproc（含 WM_CHAR） |
+| 出图 | `selftest/t_dump.cpp` | semihosting dump 整帧 → `fb.ppm`（含像素断言） |
+| 系统 API 语义 | `selftest/t_sysapi.cpp` | 文件/时间/路径等 strapi 语义，与桌面侧 `demos/fun_test/test_strapi.cpp` 双边对照 |
+
+> 同步原语 / `std::thread` / 临界区那几条（原 `swinx_test/main_syncobj.cpp`）不再重复：它们本来就是从 `demos/fun_test/test_sync.cpp|test_thread.cpp|test_cs.cpp` 抄的，桌面侧每次构建都在跑。
+
+> 🚨 **QEMU "挂死"先查 guest tick 再定性**：`-nographic` 下串口走 stdio 管道，每字符一次 write，打印密集的探针会把 tick 拖到 ~14 次/秒，长等待测试被外部 timeout 杀掉，表象是 exit=124 的"假 hang"。判定：换 `-serial file:` 排除背压。
+> 🚨 **Windows 版 qemu 不认 MSYS 路径**：`-serial file:/tmp/x.log` 会直接 `rc=1` 且不产日志，必须写 `-serial file:C:/Users/.../x.log`。
+
+当前状态：`soui_fr_selftest.elf` text 1,626,984 B；QEMU 实跑全绿，末行 `SOUI_FR SELFTEST PASS`，`fb.ppm` 正常落盘（320×240）。
+
+### 3.4 工程级构建细节（垫片 / include 顺序 / 链接）
+
 - 编译垫片只剩 1 个 `cmake/soui_fr_compat.h`（🚨 CMake 会**去重**重复的 `-include`，第二个会变成裸输入文件报 multiple files——多个预包含必须折进一个头）。
-- 🚨 **两个 include 顺序坑**（都由 `soui_fr/CMakeLists.txt` 用 `BEFORE` 显式钉住）：
+- 🚨 **两个 include 顺序坑**（都由 `soui_fr/cmake/project.cmake` 用 `BEFORE` 显式钉住）：
   1. `FreeRTOS-Kernel/include` 必须排在 `swinx/src` 之前 —— 内核把 `list.h` 放在 `include/` 下，`list.c` 的 `#include "list.h"` 否则落到 `swinx/src/list.h`（Wine 那份），`List_t` 直接未定义；
-  2. `demo/mps2`（`FreeRTOSConfig.h`）必须排在 `../demo` 之前 —— `../demo` 为 `<uart.h>` 在路径里，但它还带了一份 **lm3s6965 的** `FreeRTOSConfig.h`，选错了照样链接成功、运行时堆大小/优先级全错。
-- 链接侧原 49 个桩已全部归位 swinx `platform/freertos/`（`sysbridge.cpp` 扩容 + `dlfreertos.cpp` + `dlghelper.cpp`），census **0 未定义**。
+  2. `board/mps2`（`FreeRTOSConfig.h`）必须排最前 —— 内核必须按**这块板子**的配置编译。原来 `demo/` 时代这里还有个陷阱：`../demo` 同时带着一份 **lm3s6965 的** `FreeRTOSConfig.h`，选错了照样链接成功、运行时堆大小/优先级全错；`demo/` 合进来时那份已经删掉，但顺序仍然显式钉住。
+- 链接侧原 49 个桩已全部归位 swinx `platform/freertos/`（`sysbridge.cpp` 扩容 + `dlfreertos.cpp` + `dlghelper.cpp`；`sysbridge.cpp` 已于 2026-11-16 按 Win32 DLL 拆为 `memory/fileapi/sysapi.cpp`，码表转换归入 `platform/common/codepage.cpp`），census **0 未定义**。
 
 SApp 冒烟链路：`mem_res_provider.cpp`（表驱动内存 `IResProvider`，内嵌 `LAYOUT:APP_MAIN` XML）→ `SApplication` + `SAppCfg{SetRender(Render_Gdi).SetImgDecoder(ImgDecoder_Stb).SetAppResMem(pRes)}.DoConfig()` → `SHostWnd` → `CreateEx` → `ShowWindow/UpdateWindow` → semihosting dump PPM。串口实跑输出 `[app] SAppCfg::DoConfig=1` / `UpdateWindow rc=1` / `dump rc=0`，`soui_fb.ppm` 目检为蓝底方块 + 文字。
 
@@ -348,7 +395,7 @@ flowchart TB
         B1["render-gdi(cairo) · SApplication · SHostWnd · XML 布局"]
     end
     subgraph SWINX["swinx freertos 平台层（与 QEMU 同一份代码）"]
-        C1["SConnection(消息泵) · winobjs · sysbridge · input"]
+        C1["SConnection · winobjs · memory/fileapi/sysapi · input"]
         C2["framebuffer：320x240 ARGB32 + SwinxSetFbPresentCb(dirty)"]
     end
     subgraph RT["FreeRTOS 内核（MSVC-MingW port）"]
@@ -371,6 +418,15 @@ flowchart TB
 ```bash
 cd /d/work/soui4/soui-freertos/soui_sim
 
+./build.sh                 # 找工具 → configure → build（默认 Release，-j 核数）
+./build.sh --run           # 构建完直接起窗口
+./build.sh --system-deps   # 链系统 cairo/pixman/libpng/zlib（默认由 pkg-config 探测）
+./build.sh --vendored-deps # 用仓库内 vendored 源码（可复现；交叉编译一定走这条）
+```
+
+Windows 上也可以直接跑 `build.bat`（它找 bash 再转调 `build.sh`，找不到 bash 时退化成纯 cmd 流程）。等价的原始命令：
+
+```bash
 # 默认优先用系统 cairo/pixman/libpng/zlib（pkg-config 能证明存在时）
 cmake -S . -B build_sys -G Ninja
 ninja -C build_sys && ./build_sys/soui_sim.exe
@@ -406,7 +462,8 @@ ninja -C build && ./build/soui_sim.exe
 
 | 文件 | 与 wizard 的对应关系 |
 |---|---|
-| `CMakeLists.txt` | `file(GLOB ...)` + `source_group` + `target_precompile_headers(stdafx.h)`；构建细节全在 `soui_fr_project()` |
+| `CMakeLists.txt` | 只有 `project()` + `include(cmake/project.cmake)` |
+| `cmake/project.cmake` | `file(GLOB ...)` + `source_group` + `target_precompile_headers(stdafx.h)`；构建细节全在 `soui_fr_project()` |
 | `stdafx.h/.cpp` | `SCOM_MASK = scom_mask_render_gdi\|scom_mask_imgdecoder_stb` + `souistd.h` + 控件头 + `resource.h` |
 | `MainDlg.h/.cpp` | `SHostWnd` + `SDpiHandler<CMainDlg>` + `IAnimatorUpdateListener`；`EVENT_MAP_BEGIN()` / `EVENT_NAME_COMMAND(L"btn_close",…)` / `EVENT_ID_COMMAND(R.id.btn_test, …)` / `EVENT_MAP_END2(SHostWnd)` |
 | `main.cpp` | `SApplication` + `SAppCfg::DoConfig()` + `InitXmlNamedID(R.name, R.id, n)`；唯一差别是 `app.Run()` 换成"SDL 泵 + `PeekMessage`"的非阻塞循环 |
@@ -527,16 +584,17 @@ ninja -C my_app/build && ./my_app/build/hello_freertos.exe
 
 | 路径 | 作用 |
 |---|---|
-| `CMakeLists.txt` | `include(soui.cmake)` + `soui_fr_project(... SIM_HOST)` |
+| `CMakeLists.txt` | 只有 `project()` + `include(cmake/project.cmake)` |
+| `cmake/project.cmake` | 本工程入口：`SOUI_FR_CONFIG_DIR` / `SOUI_FR_STACK_WORDS` / `include(soui.cmake)` / `soui_fr_project(...)`（含向上查找 soui-freertos） |
 | `main.cpp` | FreeRTOS 任务 → SOUI 启动 → SDL/消息泵主循环 |
 | `config/FreeRTOSConfig.h` | 内核配置（栈、heap_3、tick、hook 开关） |
 | `uires/uires.idx` | 资源索引（`LAYOUT:MAIN` → `xml/main.xml`） |
 | `uires/uidef/init.xml` | 全局 UIDEF（`uidef:xml_init`） |
 | `uires/xml/main.xml` | 界面布局 |
 
-裸机工程在此基础上：复制 `demo/` 的裸机基座（§2.5 四要素）、去掉 `SIM_HOST`、换交叉工具链。
+裸机工程在此基础上：照 `soui_fr/board/` 抄一份裸机基座（§2.5 四要素）、在 `cmake/project.cmake` 里去掉 `SIM_HOST` 并补内核源、换交叉工具链。
 
-### 5.2 写一个画图的窗口（摘自 `swinx_test/main_dump.cpp`）
+### 5.2 写一个画图的窗口（摘自 `soui_fr/selftest/t_dump.cpp`）
 
 ```cpp
 #include "swinx_stl.h"       // 由 CMake -include 预包含亦可
@@ -586,9 +644,9 @@ SwinxInjectKey(tid, WM_KEYDOWN, 'A', 0);          // 经 postMsg 路由到目标
 
 ### 5.4 帧缓冲出图目检
 
-1. 目标程序调用 `main_dump.cpp` 的 `dump_fb_ppm("fb.ppm")`（ARM semihosting：`bkpt 0xAB` + SYS_OPEN/SYS_WRITE/SYS_CLOSE，QEMU 加 `-semihosting`）。
+1. 目标程序调用 `selftest/t_dump.cpp` 的 `dump_fb_ppm("fb.ppm")`（ARM semihosting：`bkpt 0xAB` + SYS_OPEN/SYS_WRITE/SYS_CLOSE，QEMU 加 `-semihosting`）。
 2. 宿主机转图：`ffmpeg -i fb.ppm fb.png`（PPM 是裸 RGB，任何图像工具都能开；仓库里的一次性转换脚本已随测试脚本一起清理）。
-3. 目检预期画面：`swinx_test` = 暗绿背景 + 蓝窗 (40,50,120×90) + 琥珀内矩形 + 灰条纹；`soui_fr` = `#103018` 深墨绿背景 + `#2070C0` 蓝窗 (20,20,280×100) + 白字标题 + `#E0B020` 琥珀第二行。
+3. 目检预期画面：`soui_fr_selftest` = 暗绿背景 + 蓝窗 (40,50,120×90) + 琥珀内矩形 + 灰条纹；`soui_fr` = `#103018` 深墨绿背景 + `#2070C0` 蓝窗 (20,20,280×100) + 白字标题 + `#E0B020` 琥珀第二行。
 
 🚨 颜色不对先查是不是 `#RRGGBBAA` 写反了，不要急着怀疑字节序——dump 的 `(px>>16, px>>8, px)` = R,G,B 与 swinx fb 约定自洽。
 
@@ -626,7 +684,7 @@ SwinxInjectKey(tid, WM_KEYDOWN, 'A', 0);          // 经 postMsg 路由到目标
 | 旧宏名 `SOUI_PLATFORM_FREERTOS_HOST` | 全部 | 宿主构建报一屏 `conflicting declaration` / `DECLSPEC_IMPORT` | 统一用 `FREERTOS_HOST`（§2.2），`sfr_config.h` 对旧名 `#error` |
 | MSYS2 cmake + `D:/` 路径 | 全部 | configure 失败 | 用 Windows 版 cmake + 绝对 `-S/-B` |
 | MSB6001 | 宿主 | configure 报代理变量冲突（`HTTPS_PROXY` 与 `https_proxy` 并存） | 先 `unset https_proxy http_proxy HTTPS_PROXY HTTP_PROXY` |
-| `WCHAR_SIZE` 与 `wchar_t` 不符 | 宿主 | 字符串交错 NUL、`LAYOUT` 乱码、布局加载失败全黑窗（ARM 不复现） | `-DWCHAR_SIZE=__SIZEOF_WCHAR_T__`（已配）；转换实现在 `platform/freertos/sysbridge.cpp`，改 `sysapi.cpp` 无效 |
+| `WCHAR_SIZE` 与 `wchar_t` 不符 | 宿主 | 字符串交错 NUL、`LAYOUT` 乱码、布局加载失败全黑窗（ARM 不复现） | `-DWCHAR_SIZE=__SIZEOF_WCHAR_T__`（已配）；转换实现在 `platform/common/codepage.cpp`（唯一一份，iconv 失败自动走内置表），改平台目录里的文件无效 |
 | 缺 `CAIRO_WIN32_STATIC_BUILD` | 宿主 | `__imp_cairo_*` 全线未定义（含 `libcairo_fr.a` 内部） | 所有含 cairo 头的 target 都加（§4.3） |
 | swinx Win32 实现 vs libkernel32 | 宿主 | 约 25 个符号多重定义 | `-Wl,--allow-multiple-definition`，swinx 链接序在前 |
 | 缺 NDEBUG | 宿主 | 全新 configure 后启动即 abort | `CMAKE_BUILD_TYPE=Release` 默认；验收用全新构建树 |
@@ -647,11 +705,11 @@ SwinxInjectKey(tid, WM_KEYDOWN, 'A', 0);          // 经 postMsg 路由到目标
 
 已完成：
 
-1. ✅ 原 49 个链接桩归位 swinx `platform/freertos/`（`sysbridge.cpp` 扩容 + `dlfreertos.cpp` + `dlghelper.cpp`），census 0 未定义。
+1. ✅ 原 49 个链接桩归位 swinx `platform/freertos/`（`sysbridge.cpp` 扩容 + `dlfreertos.cpp` + `dlghelper.cpp`，前者已拆分为 `memory/fileapi/sysapi.cpp`，码表转换在 `platform/common/codepage.cpp`），census 0 未定义。
 2. ✅ 3 个 shim 头收编：swinx 侧 `platform/freertos/sys/{mman.h,dirent.h}`；SOUI 侧上游补显式 include（`SSingleton2.h` / `SAnimation.h` / `souicoll.h`）。
 3. ✅ QEMU 真跑 SApp 出图（§3.3）。
 4. ✅ Windows 宿主模拟器 `soui_sim`（§4），并重排成标准 wizard 工程形状。
-5. ✅ 构建收敛：`cmake/soui.cmake` 成为唯一入口，`templates/app` 复制即用。
+5. ✅ 构建收敛：机制（`cmake/soui.cmake` + `SouiFreeRTOS.cmake`）与工程入口（`<工程>/cmake/project.cmake`）分离，`templates/app` 复制即用。
 6. ✅ 平台宏收敛：宿主编译只认 `FREERTOS_HOST`，swinx 侧只在 `sfr_config.h` 一处做派生（§2.2）。
 
 下一步（按价值排序）：
@@ -681,13 +739,15 @@ SwinxInjectKey(tid, WM_KEYDOWN, 'A', 0);          // 经 postMsg 路由到目标
 | XML 颜色解析（`#RRGGBBAA`） | `SOUI/src/res.mgr/SNamedValue.cpp` |
 | swinx 平台开关唯一入口 | `swinx/include/sfr_config.h` |
 | swinx 宿主分支能力差异 | `swinx/include/{commctrl,ctypes,fileapi,strapi,sysapi}.h` |
-| swinx freertos 平台层 | `swinx/src/platform/freertos/`（`SConnection.cpp` / `winobjs.cpp` / `framebuffer.cpp` / `input.cpp` / `syncapi.cpp` / `sysbridge.cpp` / `stl/`） |
+| swinx freertos 平台层 | `swinx/src/platform/freertos/`（`SConnection.cpp` / `winobjs.cpp` / `framebuffer.cpp` / `input.cpp` / `syncapi.cpp` / `memory.cpp` / `fileapi.cpp` / `sysapi.cpp` / `stl/`） |
+| swinx 平台中立层 | `swinx/src/platform/common/`（`msgpump.cpp` 消息泵 / `perfclock.cpp` QPF·QPC / `codepage.cpp` 码表 / `sysapi.cpp` 零散 Win32 语义 / `interlocked.cpp` 32 位原子，与 posix 家族共用一份） |
+| swinx 平台契约（三份） | `swinx/src/SwinxUtils.h`：`swinx_perf_ticks_100ns()` tick 源、`swinx_system_metric_scale()` 度量缩放、`swinx_ansi_codepage()` ANSI 码页 —— 同符号分目录实现，链接期解析 |
 | swinx POSIX 系统 API 实现 | `swinx/src/platform/posix/`（freertos **不**编这一目录） |
 | 帧缓冲接口 | `swinx/src/platform/freertos/framebuffer.h`（`SWINX_FB_WIDTH` / `SwinxSetFbPresentCb` / `SwinxFbBits`） |
 | 输入注入接口 | `swinx/src/platform/freertos/input.h`（`SwinxInjectMouse` / `SwinxInjectKey`） |
-| 字符串转换实装（`WCHAR_SIZE`） | `swinx/src/uniconv.h` + `swinx/src/platform/freertos/sysbridge.cpp` |
+| 字符串转换实装（`WCHAR_SIZE`） | `swinx/src/uniconv.h` + `swinx/src/platform/common/codepage.cpp`（各平台共用；freertos 只在 `sysapi.cpp` 提供 iconv 桩） |
 | 构建入口 | `soui-freertos/cmake/soui.cmake`、`cmake/SouiFreeRTOS.cmake` |
-| 裸机基座权威实现 | `soui-freertos/demo/{syscalls.c,startup.c,mps2/mps2-an385.ld}` |
+| 裸机基座权威实现 | `soui-freertos/soui_fr/board/{syscalls.c,startup.c,mps2/mps2-an385.ld}` |
 
 ## 附录 B 编译定义总表
 

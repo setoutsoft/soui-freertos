@@ -1,28 +1,43 @@
 # =============================================================================
-# soui.cmake -- the ONE file a "SOUI on FreeRTOS" project has to include.
+# soui.cmake -- "SOUI on FreeRTOS" 的**机制层**。
+#
+# 分工（2026-11-16 起）：
+#
+#   <工程>/cmake/project.cmake    工程入口。这个工程怎么编：要哪几层、哪些源
+#                                 文件、栈多大、<edit> 用轻量实现还是 RichEdit、
+#                                 宿主用不用系统包、资源目录、额外 -D/-O、输出名……
+#   cmake/soui.cmake              本文件。机制：定位环境、include 依赖描述、
+#                                 提供三个函数。这里不写"某个工程怎么编"。
+#   cmake/SouiFreeRTOS.cmake      依赖描述：cairo/pixman/libpng/zlib、swinx、
+#                                 SOUI、FreeRTOS 内核 → INTERFACE targets。
+#
+# 于是每个工程的 CMakeLists.txt 只剩三行，真正的配置在它自己的 cmake 目录里：
 #
 #   cmake_minimum_required(VERSION 3.20)
 #   project(my_app C CXX)
-#   include(<soui-freertos>/cmake/soui.cmake)
+#   include(cmake/project.cmake)
+#
+# 而 cmake/project.cmake 长这样：
+#
+#   set(SOUI_FR_CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/config")   # FreeRTOSConfig.h
+#   set(SOUI_FR_STACK_WORDS 16384)                                 # 任务栈（字）
+#   include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/soui.cmake)
 #   soui_fr_project(my_app SOURCES main.cpp SIM_HOST)
 #
-# That is the whole build system of a new project.  Everything else -- the
-# FreeRTOS kernel, swinx, SOUI core, cairo/pixman/libpng/zlib, the include
-# dirs, the -D flags, the uires -> windres -> incbin resource pipeline and the
-# Windows runtime-DLL harvest -- is set up here.
+# include 之前可以设置的工程变量（全部可选，取值与含义见 SouiFreeRTOS.cmake
+# 的 "工程可覆盖项" 一节）：SOUI_FR_CONFIG_DIR / SOUI_FR_STACK_WORDS /
+# SOUI_FR_PORT_DIR / SOUI_FR_EDIT_LITE / SOUI_FR_USE_RICHEDIT /
+# SOUI_FR_USE_SYSTEM_DEPS / SOUI_FR_WARNINGS / SOUI_FR_DEFINITIONS /
+# SOUI_FR_COMPILE_OPTIONS / SOUI_FR_SWINX_PLATFORM_SRCS。
 #
-# Layout:
-#
-#   soui.cmake              this file: the public facade (include this)
-#     SouiFreeRTOS.cmake    dependency description (INTERFACE targets)
-#     CopyRuntimeDlls.cmake POST_BUILD helper for the system-deps build
-#     soui_fr_compat.h      force-included compat header
-#   ../sim/                 optional SDL2 host runtime (window + input)
-#
-# Public API (all optional except the first):
+# Public API（除第一个参数外都可选）：
 #
 #   soui_fr_project(<target>
 #       SOURCES <src>...              application sources (required)
+#       [COMPONENTS all|thirdparty|swinx|soui|freertos]
+#                                     要哪几层。默认 all = 内核 + 三方库 +
+#                                     swinx + SOUI（典型应用）；COMPONENTS swinx
+#                                     只装 swinx 平台层（平台层自测工程）。
 #       [RESOURCES <dir>]             dir holding uires.idx (default: ./uires)
 #       [RESOURCE_SCRIPT <file.rc>]   custom .rc (default: generated)
 #       [NO_RESOURCES]                plain-text app without PE resources
@@ -30,6 +45,9 @@
 #       [SIM_HOST]                    link the SDL2 simulator runtime
 #       [INCLUDES <dir>...]           extra include dirs for the app only
 #       [LIBRARIES <lib>...]          extra link libraries for the app only
+#       [DEFINITIONS <def>...]        extra -D for the app only
+#       [COMPILE_OPTIONS <opt>...]    extra compile options for the app only
+#       [LINK_OPTIONS <opt>...]       extra link options for the app only
 #       [OUTPUT_NAME <name>]          executable base name (default: <target>))
 #
 #   RESOURCES is a Windows-host step: it shells out to <soui4>/tools/
@@ -46,35 +64,14 @@
 #   soui_fr_add_all() / soui_fr_link_app(<target>) / soui_fr::* targets
 #       the lower-level API from SouiFreeRTOS.cmake, still available.
 #
-# Cross builds (arm-none-eabi toolchain file) need no change: the same include
-# picks the bare-metal combination automatically (vendored cairo, ARM_CM3 port,
-# no SDL, no runtime DLL harvest).
-#
-# Finding this file from a project outside the workspace: walk up until a
-# directory holds cmake/soui.cmake, or pass -DSOUI_FR_ENV_DIR.  templates/app
-# carries the ready-made snippet.
+# Cross builds (arm-none-eabi toolchain file) need no change: the same
+# environment picks the bare-metal combination automatically (vendored cairo,
+# ARM_CM3 port, no SDL, no runtime DLL harvest).
 # =============================================================================
 include_guard(GLOBAL)
 
 get_filename_component(SOUI_FR_CMAKE_DIR "${CMAKE_CURRENT_LIST_FILE}" DIRECTORY)
 get_filename_component(SOUI_FR_ENV_DIR "${SOUI_FR_CMAKE_DIR}" DIRECTORY)
-
-# -----------------------------------------------------------------------------
-# pre-include probing
-#
-# These two directories have to be known *before* SouiFreeRTOS.cmake runs,
-# because it bakes them into the INTERFACE targets.  Both follow the layout a
-# new project gets by copying soui-freertos/templates/app, but stay overridable
-# by -D or by setting the variable before this include.
-# -----------------------------------------------------------------------------
-if(NOT SOUI_FR_CONFIG_DIR AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/config/FreeRTOSConfig.h")
-    set(SOUI_FR_CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/config")
-endif()
-if(NOT SOUI_FR_CONFIG_DIR)
-    message(WARNING
-        "[soui_fr] no FreeRTOSConfig.h found (looked in ${CMAKE_CURRENT_SOURCE_DIR}/config). "
-        "Set SOUI_FR_CONFIG_DIR or pass FREERTOS_CONFIG to soui_fr_project().")
-endif()
 
 include("${SOUI_FR_CMAKE_DIR}/SouiFreeRTOS.cmake")
 
@@ -329,7 +326,8 @@ endfunction()
 # =============================================================================
 function(soui_fr_project target)
     set(_one FREERTOS_CONFIG OUTPUT_NAME)
-    set(_multi SOURCES RESOURCES RESOURCE_SCRIPT INCLUDES LIBRARIES)
+    set(_multi SOURCES RESOURCES RESOURCE_SCRIPT INCLUDES LIBRARIES
+               COMPONENTS DEFINITIONS COMPILE_OPTIONS LINK_OPTIONS)
     set(_flags SIM_HOST NO_RESOURCES)
     cmake_parse_arguments(ARG "${_flags}" "${_one}" "${_multi}" ${ARGN})
 
@@ -337,7 +335,33 @@ function(soui_fr_project target)
         message(FATAL_ERROR "[soui_fr] soui_fr_project(${target}) needs SOURCES")
     endif()
 
-    soui_fr_add_all()
+    # ---- 组件选择 -----------------------------------------------------------
+    # 默认 all：内核 + 三方库 + swinx + SOUI，也就是一个典型 SOUI 应用要的全部。
+    # 只要平台层（swinx_test 那类"测 swinx 自己"的工程）就写 COMPONENTS swinx：
+    # 省掉 SOUI 的 ~120 个 TU，也省掉 whole-archive 的 COM 注册表。
+    set(_comps ${ARG_COMPONENTS})
+    if(NOT _comps)
+        set(_comps all)
+    endif()
+    if("all" IN_LIST _comps)
+        soui_fr_add_all()
+        set(_with_soui ON)
+    else()
+        set(_with_soui OFF)
+        soui_fr_create_platform_target()
+        # add_* 彼此依赖（soui -> swinx -> thirdparty），选到哪一层就把下面补齐。
+        if("soui" IN_LIST _comps)
+            soui_fr_add_soui()
+            set(_with_soui ON)
+        elseif("swinx" IN_LIST _comps)
+            soui_fr_add_swinx()
+        elseif("thirdparty" IN_LIST _comps)
+            soui_fr_add_thirdparty()
+        endif()
+        if("freertos" IN_LIST _comps AND NOT SOUI_FR_BARE_METAL)
+            soui_fr_add_freertos_host()
+        endif()
+    endif()
 
     # ---- FreeRTOSConfig.h ---------------------------------------------------
     # SouiFreeRTOS.cmake bakes SOUI_FR_CONFIG_DIR into the INTERFACE targets at
@@ -388,8 +412,28 @@ function(soui_fr_project target)
         set_target_properties(${target} PROPERTIES OUTPUT_NAME "${ARG_OUTPUT_NAME}")
     endif()
 
-    # SOUI libraries (whole-archive: keeps the static COM registrations alive)
-    soui_fr_link_app(${target})
+    if(_with_soui)
+        # SOUI libraries (whole-archive: keeps the static COM registrations alive)
+        soui_fr_link_app(${target})
+    else()
+        # 没有 SOUI 就没有静态 COM 注册表，不需要 whole-archive：直接链
+        # INTERFACE 目标，链接器按引用拉取归档成员。
+        target_link_libraries(${target} PRIVATE soui_fr_platform)
+        if(TARGET soui_fr_swinx)
+            target_link_libraries(${target} PRIVATE soui_fr_swinx)
+        endif()
+        if(TARGET soui_fr_freertos)
+            target_link_libraries(${target} PRIVATE soui_fr_freertos)
+        endif()
+        if(NOT WIN32)
+            target_link_libraries(${target} PRIVATE m)   # cairo/pixman 的 libm
+        endif()
+        # swinx 用 FreeRTOS 原语重实现了一票 Win32 API；宿主上同名符号也在
+        # 导入库里，保留先到的那个（swinx）定义。
+        if(WIN32 AND NOT MSVC)
+            target_link_options(${target} PRIVATE -Wl,--allow-multiple-definition)
+        endif()
+    endif()
 
     if(ARG_SIM_HOST)
         soui_fr_add_sim_host(${target})
@@ -401,7 +445,16 @@ function(soui_fr_project target)
     if(ARG_LIBRARIES)
         target_link_libraries(${target} PRIVATE ${ARG_LIBRARIES})
     endif()
+    if(ARG_DEFINITIONS)
+        target_compile_definitions(${target} PRIVATE ${ARG_DEFINITIONS})
+    endif()
+    if(ARG_COMPILE_OPTIONS)
+        target_compile_options(${target} PRIVATE ${ARG_COMPILE_OPTIONS})
+    endif()
+    if(ARG_LINK_OPTIONS)
+        target_link_options(${target} PRIVATE ${ARG_LINK_OPTIONS})
+    endif()
 
-    message(STATUS "[soui_fr] project '${target}': "
-                   "${ARG_SOURCES} ${_res_objs} SIM_HOST=${ARG_SIM_HOST}")
+    message(STATUS "[soui_fr] project '${target}': components=${_comps} "
+                   "sources=${ARG_SOURCES} res=${_res_objs} SIM_HOST=${ARG_SIM_HOST}")
 endfunction()

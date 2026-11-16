@@ -8,14 +8,15 @@ SOUI4/SOUI5 移植 FreeRTOS 的全部实验工程。上游源码在 `D:/work/sou
 
 | 目录 | 目标 | 说明 |
 |------|------|------|
-| `cmake/soui.cmake` | — | **唯一构建入口**：`include` + `soui_fr_project()` 即完成整环境搭建 |
+| `cmake/` | — | **构建机制**：`soui.cmake`（环境 + 三个函数）、`SouiFreeRTOS.cmake`（依赖描述）、`CopyRuntimeDlls.cmake`；不含任何工程取值 |
+| `<工程>/cmake/project.cmake` | — | **每个工程自己的构建入口**：要哪几层、源文件、任务栈、`<edit>` 实现、系统包、资源、额外 `-D`/`-O`。`<工程>/CMakeLists.txt` 只剩 `project()` + 一行 `include` |
 | `sim/` | Windows 宿主 | SDL2 宿主运行时（窗口/出图/鼠标键盘注入），被 `SIM_HOST` 工程复用 |
 | `templates/app/` | Windows 宿主 | 新建工程模板：复制即用，构建脚本 2 行 |
-| `demo/` | QEMU mps2-an385 (Cortex-M3) | 裸机 FreeRTOS 冒烟：UART 输出 + 调度器跑通，移植 earliest 基线 |
-| `swinx_test/` | QEMU mps2-an385 | swinx freertos 平台层单测（fb/input/syncobj/render 等 main_*.cpp 变体） |
-| `soui_fr/` | QEMU mps2-an385 | 完整 SOUI SApp 冒烟：XML 布局 → render-gdi(cairo) → LCD fb（截图由程序运行时落盘）。构建与 `soui_sim` 同一套 `soui.cmake`，差异只在 toolchain、板级文件与内核源 |
+| `soui_fr/` | QEMU mps2-an385 (Cortex-M3) | **裸机工程的完整形态**。`board/` 是板级基座（`startup.c` / `syscalls.c` / `uart_mps2.c` / `FreeRTOSConfig.h` / `mps2-an385.ld`），`soui_app.cpp` 是完整 SOUI SApp 冒烟（XML 布局 → render-gdi(cairo) → LCD fb，截图由程序运行时落盘），`selftest/` 是 swinx 平台层自测（消息泵 / 帧缓冲提交 / 输入注入 / 半主机 dump / sysapi 语义），一个 `cmake/project.cmake` 出两个 ELF |
 | `soui_sim/` | Windows 宿主 (MinGW) | **FreeRTOS Windows 模拟器**：FreeRTOS-Kernel MSVC-MingW port + swinx freertos 层 + SDL2 出图/鼠标注入，与 QEMU 目标 95% 同构，用于快速迭代交互测试 |
-| `FreeRTOS-Kernel/` | — | vendored 内核（demo / soui_fr / swinx_test / soui_sim 共用，含 `portable/MSVC-MingW`） |
+| `FreeRTOS-Kernel/` | — | vendored 内核（soui_fr / soui_sim 共用，含 `portable/MSVC-MingW`） |
+
+2026-11 起不再有独立的 `demo/` 与 `swinx_test/`：前者是裸机最小基座，已并入 `soui_fr/board/`；后者是 swinx 平台层单测，其中**读不到桌面等价物**的几条（`SConnection` 消息泵、framebuffer 提交、`SwinxInject*` 输入注入、半主机 dump）已并入 `soui_fr/selftest/`，其余同步原语 / 线程 / 临界区用例本来就抄自 `demos/fun_test`，那边每次桌面构建都会跑，故不再重复。
 
 仓库只保留源码与构建脚本：构建目录、截图帧、一次性探针脚本都不入库（`.gitignore` 已覆盖 `build*/`、`*.log`、`*.ppm`）。
 
@@ -27,7 +28,42 @@ SOUI4/SOUI5 移植 FreeRTOS 的全部实验工程。上游源码在 `D:/work/sou
 
 FreeRTOS 内核默认用本仓库 vendored 的 `FreeRTOS-Kernel/`（含 `portable/MSVC-MingW`，soui_sim 直接复用），不再需要外部 `lvgl_simulator` 那份。
 
-## 新建项目：一个 include + 一个函数
+## 构建系统：机制 vs 工程入口
+
+2026-11-16 起把"机制"和"某个工程怎么编"分开，改一个工程不会牵动别的工程：
+
+| 位置 | 角色 | 什么时候改 |
+|---|---|---|
+| `<工程>/cmake/project.cmake` | **工程入口**。`<工程>/CMakeLists.txt` 只剩 `project()` + `include(cmake/project.cmake)`。这个工程怎么编全在这一个文件里：`COMPONENTS`（要哪几层）、源文件、任务栈、`<edit>` 实现、系统 cairo、资源目录、额外 `-D`/`-O`、输出名 | 各工程自己 |
+| `cmake/soui.cmake` | **机制**：定位环境、`include` 依赖描述、提供 `soui_fr_project()` / `soui_fr_add_resources()` / `soui_fr_add_sim_host()`。不写任何"某个工程怎么编"的取值 | 几乎不用改 |
+| `cmake/SouiFreeRTOS.cmake` | **依赖描述**：cairo/pixman/libpng/zlib、swinx、SOUI、FreeRTOS 内核 → INTERFACE targets。文件头有"工程可覆盖项"清单 | 上游源码或平台层变了才改 |
+
+工程级的编译配置都走 `SOUI_FR_*` 变量：在 `project.cmake` 里 `include` **之前** `set()`。
+
+| 变量 | 作用 | 兜底 |
+|---|---|---|
+| `SOUI_FR_CONFIG_DIR` | 放着 `FreeRTOSConfig.h` 的目录 | 必填（不再偷偷探测 `./config`） |
+| `SOUI_FR_STACK_WORDS` | `CreateThread()` 默认栈，单位**字** | 裸机 16384 / 宿主 32768 |
+| `SOUI_FR_PORT_DIR` | 内核 port 目录 | 裸机 `GCC/ARM_CM3` / 宿主 `MSVC-MingW` |
+| `SOUI_FR_EDIT_LITE` | `<edit>` 走轻量自绘实现（`SEditLite.cpp`，定义 `SOUI_EDIT_LITE`），不编 richedit41 | ON |
+| `SOUI_FR_USE_RICHEDIT` | 编入 richedit41，仅供 RichEdit 版 `<edit>` 使用（要先把 `SOUI_FR_EDIT_LITE` 关掉） | OFF |
+| `SOUI_FR_USE_SYSTEM_DEPS` | 宿主是否链系统 cairo/pixman/png/zlib | pkg-config 探测，交叉强制 OFF |
+| `SOUI_FR_WARNINGS` | 是否保留编译警告 | OFF（`-w -fpermissive`） |
+| `SOUI_FR_DEFINITIONS` / `SOUI_FR_COMPILE_OPTIONS` | 追加到**整棵树**（含 swinx/SOUI/cairo 的每个 TU）的 `-D` / 编译选项 | 空 |
+| `SOUI_FR_SWINX_PLATFORM_SRCS` | 覆盖 swinx 平台层源文件清单 | 默认 11 个文件 + `common/*` 的 glob |
+
+只要影响应用自己的源文件时，用 `soui_fr_project(... DEFINITIONS/COMPILE_OPTIONS)`，那是 PRIVATE 到目标、不会外溢。
+
+三个工程的配置差异现在一眼可见：
+
+| 工程 | COMPONENTS | 栈（字） | `<edit>` | 宿主运行时 |
+|---|---|---|---|---|
+| `soui_sim` | `all` | 32768 | SEditLite | SDL2（`SIM_HOST`） |
+| `soui_fr`（`soui_fr.elf`） | `all` | 16384 | SEditLite | 板级 LCD（半主机 dump） |
+| `soui_fr_selftest`（`SOUI_FR_SELFTEST=ON`） | `swinx` | 16384 | —（不编 SOUI） | 无（QEMU 串口） |
+| `templates/app` | `all` | 32768 | SEditLite | SDL2（`SIM_HOST`） |
+
+## 新建项目：复制模板，只改一个文件
 
 ```bash
 cp -r soui-freertos/templates/app  my_app
@@ -35,11 +71,21 @@ cmake -S my_app -B my_app/build -G Ninja
 ninja -C my_app/build && ./my_app/build/hello_freertos.exe
 ```
 
-`my_app/CMakeLists.txt` 全文（除 `project()`/编译标准外）就这两行：
+复制出来的工程有两个文件：`CMakeLists.txt` 只声明工程，配置全在 `cmake/project.cmake`。
 
 ```cmake
-include(<soui-freertos>/cmake/soui.cmake)
-soui_fr_project(hello_freertos SOURCES main.cpp SIM_HOST)
+# my_app/CMakeLists.txt
+cmake_minimum_required(VERSION 3.20)
+project(hello_freertos C CXX)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/project.cmake)
+```
+
+```cmake
+# my_app/cmake/project.cmake —— 本工程的入口（模板里含"向上查找 soui-freertos"的探测）
+set(SOUI_FR_CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/config")   # FreeRTOSConfig.h
+set(SOUI_FR_STACK_WORDS 32768)                                 # CreateThread 默认栈（字）
+include(${SOUI_FR_ENV_DIR}/cmake/soui.cmake)
+soui_fr_project(hello_freertos SOURCES main.cpp COMPONENTS all SIM_HOST)
 ```
 
 `soui_fr_project()` 一次做完：
@@ -55,7 +101,7 @@ soui_fr_project(hello_freertos SOURCES main.cpp SIM_HOST)
 | 宿主出图 | `SIM_HOST` 时链 `sim/soui_sim_hal.cpp`（SDL2 窗口 / ARGB 纹理 / 鼠标键盘注入） |
 | Windows 运行 | system-deps 构建自动把 20 个运行时 DLL 收拢到 exe 同级 |
 
-参数（全部可选）：`SOURCES`（必填）、`RESOURCES`（默认 `./uires`）、`RESOURCE_SCRIPT`（默认自动生成）、`NO_RESOURCES`、`FREERTOS_CONFIG`（默认 `./config`）、`SIM_HOST`、`INCLUDES`、`LIBRARIES`、`OUTPUT_NAME`。裸机交叉编译只需换 toolchain file 并去掉 `SIM_HOST`。
+参数（除 `SOURCES` 外都可选）：`SOURCES`（必填）、`COMPONENTS`（`all` 默认 / `thirdparty` / `swinx` / `soui` / `freertos`，选到哪层就把下层补齐）、`RESOURCES`（默认 `./uires`）、`RESOURCE_SCRIPT`（默认自动生成）、`NO_RESOURCES`、`FREERTOS_CONFIG`（覆盖 `SOUI_FR_CONFIG_DIR`）、`SIM_HOST`、`INCLUDES`、`LIBRARIES`、`DEFINITIONS`、`COMPILE_OPTIONS`、`LINK_OPTIONS`、`OUTPUT_NAME`。裸机交叉编译只需换 toolchain file 并去掉 `SIM_HOST`。
 
 需要更细的控制时，底层 API 仍然可用：
 
@@ -74,7 +120,8 @@ soui_fr_link_app(app)                 # 等价于 target_link_libraries(app PRIV
 
 | 文件 | 与 wizard 的对应关系 |
 |---|---|
-| `CMakeLists.txt` | 同 wizard：`file(GLOB SOURCES/HEADERS)` + `source_group` + `target_precompile_headers(stdafx.h)`，构建细节收进 `soui_fr_project()` |
+| `CMakeLists.txt` | 只有 `project()` + `include(cmake/project.cmake)` |
+| `cmake/project.cmake` | 同 wizard 的构建部分：`file(GLOB SOURCES/HEADERS)` + `source_group` + `target_precompile_headers(stdafx.h)` + `soui_fr_project()` |
 | `stdafx.h` / `stdafx.cpp` | 同 wizard：`#define SCOM_MASK (scom_mask_render_gdi\|scom_mask_imgdecoder_stb)` + `souistd.h` + 控件头 + `resource.h` |
 | `MainDlg.h` / `MainDlg.cpp` | 同 wizard：`SHostWnd` + `SDpiHandler<CMainDlg>`，`EVENT_MAP_BEGIN()` / `EVENT_NAME_COMMAND` / `EVENT_ID_COMMAND(R.id.xxx, …)` / `EVENT_MAP_END2(SHostWnd)` + `BEGIN_MSG_MAP_EX` |
 | `main.cpp` | 同 wizard：`SApplication` + `SAppCfg::DoConfig()` + `InitXmlNamedID(R.name, R.id, …)`；差别只是 `app.Run()` 换成宿主消息泵（FreeRTOS 任务里 pump + 事件投递） |
@@ -105,24 +152,47 @@ soui_fr_link_app(app)                 # 等价于 target_link_libraries(app PRIV
 
 ## 构建
 
+两个工程各带一个构建脚本，负责把"工具装了但不在 PATH 上"这类环境问题挡在前面（`build.sh` 给 Git Bash / MSYS2 / Linux / macOS，`build.bat` 给 cmd / PowerShell，后者只负责找到 bash 再转调前者）：
+
+```bash
+# 宿主模拟器（Windows 上也可以直接双击 build.bat）
+soui_sim/build.sh              # configure + build → build/soui_sim.exe
+soui_sim/build.sh --run        # 构建完直接起窗口
+soui_sim/build.sh --reconfigure --clean -j8 -- -DSDL2_DIR=...
+
+# 裸机（QEMU mps2-an385）：交叉工具链 + QEMU 都由脚本自己找
+soui_fr/build.sh               # 出 build/soui_fr.elf + build/soui_fr_selftest.elf
+soui_fr/build.sh --run         # 构建完在 QEMU 里跑两个镜像并校验完成标记
+soui_fr/build.sh --run selftest  # 只跑平台层自测
+soui_fr/build.sh --census      # 全量符号面（--whole-archive，只链不跑）
+soui_fr/build.sh --no-selftest # 只出 app 镜像
+```
+
+脚本找不到工具时会直接说清装什么（MSYS2 用 `pacman -S mingw-w64-x86_64-arm-none-eabi-gcc` / `mingw-w64-x86_64-qemu` / `mingw-w64-x86_64-SDL2`），而不是抛一段 CMake 内部报错。两个脚本都带两个 Windows 专有的坑的防护：
+
+- **msys 版 cmake 不能选**。`/usr/bin/cmake` 属于 msys 环境，它会把 `C:/msys64/...` 改写成 `/mingw64/...` 再交给原生 ninja，交叉配置必然失败在 `C compiler is not able to compile a simple test program`。脚本优先用原生 CMake，选到 msys 版会明确报错；同理，喂给 cmake 的路径一律转成 Windows 形式（`cygpath -m`），否则 Git Bash 的 `/d/work/...` 会和 cache 里的 `D:/work/...` 打架，报 `CMakeCache.txt directory is different`。
+- **`build/.ninja_log` 被占用**。ninja 在生成阶段会重压缩 `.ninja_log` 再 rename 回去，此时文件被杀毒实时扫描 / 编辑器索引 / 上一次被强杀的 ninja 占着就报 `failed recompaction: Permission denied`，而且构建历史一起作废——下一轮会把几百个 TU 全部重编。脚本会自动清掉残留的 `.ninja_log.recompact` / `.restat` 重试一次，仍失败就提示 `--clean`。
+
+脚本默认**不重复 configure**（`build/CMakeCache.txt` 存在就直接 build）：改 `CMakeLists.txt` / `cmake/*.cmake` 时 ninja 自己会重跑 cmake，`--reconfigure` 只是强制手段。原始 cmake 命令等价于：
+
 ```bash
 # 宿主模拟器：默认优先链接系统 cairo/pixman/libpng/zlib（pkg-config 能证明存在时）
-cmake -S soui_sim -B soui_sim/build_sys -G Ninja
-ninja -C soui_sim/build_sys
-./soui_sim/build_sys/soui_sim.exe
+cmake -S soui_sim -B soui_sim/build -G Ninja
+ninja -C soui_sim/build
+./soui_sim/build/soui_sim.exe
 
 # 想用 vendored 源码（可复现 / 交叉编译一定是这条路）
 cmake -S soui_sim -B soui_sim/build -G Ninja -DSOUI_FR_USE_SYSTEM_DEPS=OFF
 
-# 裸机（QEMU mps2-an385）：与宿主工程同一套 soui.cmake，只多一个 toolchain；
-# 板级文件（startup/syscalls/uart + 链接脚本）和内核源留在工程自己的 CMakeLists 里
+# 裸机（QEMU mps2-an385）：与宿主工程同一套机制（cmake/soui.cmake），只多一个
+# toolchain；板级文件（board/startup.c、board/syscalls.c、board/mps2/*）与内核源
+# 都在那个工程自己的 cmake/project.cmake 里
 cmake -S soui_fr -B soui_fr/build -G Ninja \
-    -DCMAKE_TOOLCHAIN_FILE=../demo/cmake/toolchain-arm-freertos.cmake
+    -DCMAKE_TOOLCHAIN_FILE="$PWD/soui_fr/cmake/toolchain-arm-freertos.cmake"
 ninja -C soui_fr/build
-
-# demo / swinx_test 仍是各自的 CMake（不依赖 soui.cmake）
-cmake -S <proj> -B <proj>/build -G Ninja && ninja -C <proj>/build
 ```
+
+两个工程都只在自己的 `cmake/project.cmake` 里描述"怎么编"，共用 `cmake/` 下的机制与依赖图。
 
 `SOUI_FR_USE_SYSTEM_DEPS` 是一次写入 cache 的普通布尔选项（`-D` 之后不会在下次 reconfigure 被自动探测覆盖）；交叉编译/裸机永远走 vendored 源码。
 
@@ -186,8 +256,9 @@ cmake -S <proj> -B <proj>/build -G Ninja && ninja -C <proj>/build
 | `SWINX_NO_MMAP` | 去掉 `<sys/mman.h>` 与文件映射路径（裸机没有 mmap，图标只从资源块来）；`LR_LOADFROMFILE` 因此不可用 |
 | `SWINX_OWN_USER32` | 宿主模拟器是 `_WIN32` 但在跑 swinx 垫片，`LoadImageA` 必须用本文件这份，不能落到 user32.dll 的同名导入（那份不认识内嵌 COFF 资源，一律返回 NULL） |
 
-`sysbridge.cpp` 里原来的 `LoadImageA` / `LoadImageBuf` / `LoadBitmapA` /
-`CreateIconFromResource` 四个 NULL 桩已删除。
+旧的 `sysbridge.cpp`（已于 2026-11-16 拆成 `memory/fileapi/sysapi.cpp` 三个文件，
+码表转换另并入 `platform/common/codepage.cpp`）里的 `LoadImageA` / `LoadImageBuf` /
+`LoadBitmapA` / `CreateIconFromResource` 四个 NULL 桩已删除。
 
 用法与 Windows 一致，注意 `SIconWnd` 的属性名是 **`src`**
 （`SOUI_ATTRS: ATTR_CUSTOM(L"src", OnAttrIcon)`）：
@@ -249,10 +320,11 @@ QEMU mps2-an385 实跑 `CreateEx → UpdateWindow → dump_fb_ppm` 全程正常�
   UTF-16LE，`coffparser` 在 `wchar_t=4` 的平台调 `to_unicode(CP_UTF16_LE)`，
   裸机 newlib 的 iconv 没有 UTF-16 源转换器 → 所有命名资源解析成 `L""`
   （`EnumResourceTypesA` 只剩 `#14` / `#3` 两个整数类型），`FindResourceA`
-  全部 miss。已在 `swinx/src/platform/freertos/sysbridge.cpp` 给
-  `to_unicode` / `builtinToUnicode` 补 UTF-16LE/BE 内置转换。
+  全部 miss。已在 `swinx/src/platform/common/codepage.cpp`（原 `freertos/codepage.cpp`，
+  再往前是 `sysbridge.cpp` 的同段代码）给 `to_unicode` / `builtinToUnicode` 补
+  UTF-16LE/BE 内置转换；这段兜底现在对所有 iconv 不可用的平台统一生效（见 11.12）。
 
-配套构建细节（`cmake/soui.cmake`）：uiresbuilder 按 `CMAKE_HOST_WIN32` 判断；
+配套构建细节（`cmake/soui.cmake` 的资源流水线）：uiresbuilder 按 `CMAKE_HOST_WIN32` 判断；
 windres 命令前置 MinGW 目录到 PATH（否则交叉工具链下 `gcc -E` 预处理失败）；
 裸机 blob 段名与 8 字节对齐；`soui_app.cpp` 对
 `_binary_soui_coff_o_start/_end` 做强引用，避免 `--gc-sections` 丢弃 blob。
@@ -266,22 +338,25 @@ windres 命令前置 MinGW 目录到 PATH（否则交叉工具链下 `gcc -E` �
 
 ## 裸机目标与 QEMU 实跑
 
-`soui_fr` / `swinx_test` / `demo` 三个工程交叉编译到 **QEMU mps2-an385（Cortex-M3）**，共用 vendored 内核与 `demo/cmake/toolchain-arm-freertos.cmake`。典型流程：
+`soui_fr` 交叉编译到 **QEMU mps2-an385（Cortex-M3）**，共用 vendored 内核与 `soui_fr/cmake/toolchain-arm-freertos.cmake`，一个工程出两个镜像（`soui_fr.elf` 应用冒烟 + `soui_fr_selftest.elf` 平台层自测）。典型流程：
 
 ```bash
-cd soui-freertos/soui_fr            # 或 swinx_test / demo
+cd soui-freertos/soui_fr
+./build.sh --run          # 推荐：找工具链 / 配置 / 构建 / QEMU 实跑 / 校验日志标记，一条命令
+
+# 等价的手工流程
 cmake -S . -B build -G Ninja \
-    -DCMAKE_TOOLCHAIN_FILE=../demo/cmake/toolchain-arm-freertos.cmake \
-    -DSOUI_FR_CENSUS=OFF -DCMAKE_BUILD_TYPE=MinSizeRel   # -Os：否则 text 5.0MB 越 4MB FLASH
+    -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-arm-freertos.cmake" \
+    -DCMAKE_BUILD_TYPE=MinSizeRel    # -Os：否则 text 5.0MB 越 4MB FLASH
 cmake --build build
 qemu-system-arm -M mps2-an385 -nographic -semihosting -kernel build/soui_fr.elf
-#   -semihosting 是截图（soui_fb.ppm）落盘所必需；缺了它 dump_fb_ppm 会卡住
-# 需要完整跑完读日志：
-qemu-system-arm -M mps2-an385 -kernel build/swinx_test.elf \
-    -serial file:C:/temp/qemu.log -display none
+#   -semihosting 是截图（soui_fb.ppm / fb.ppm）落盘所必需；缺了它 dump_fb_ppm 会卡住
+# 两个镜像都会在跑完自己的链路后进 for(;;) 保活，判据是日志标记而不是退出码：
+#   app      → "SOUISAPP FREERTOS DONE"
+#   selftest → "SOUI_FR SELFTEST PASS"
 ```
 
-完整构建 / 运行 / 排障（含 `soui_fr` 的 `-semihosting` 出图、`demo` 的小板、串口 stdio 背压假 hang、`-serial file:` 必须写 Windows 绝对路径）见《SOUI5-FreeRTOS 开发指南》。
+完整构建 / 运行 / 排障（含 `-semihosting` 出图、串口 stdio 背压假 hang、`-serial file:` 必须写 Windows 绝对路径）见《SOUI5-FreeRTOS 开发指南》。
 
 > 🚨 **FLASH 4MB 物理上限**：mps2-an385 的 ZBT SSRAM1 只有 4MB，text 越过 `0x00400000` 即与 RAM 物理重叠，复位即 HardFault。可运行镜像必须 `--gc-sections`（census 模式 `--whole-archive` 只链不跑，用于暴露符号缺口）。
 
@@ -335,6 +410,12 @@ swinx 里判断"是不是 FreeRTOS 平台 / 有没有宿主 OS / 内核原语从
   → `-Os` 可运行镜像（`text` 必须 < 4MB）→ QEMU 实跑断言 `SOUISAPP FREERTOS DONE`
   → 校验收到的 PPM 是 320x240 且不是空帧。它证明"启动链 + 渲染落笔"每天都能复现，
   不证明画面好不好看。
+- **`<edit>` 是轻量自绘实现（`SOUI_EDIT_LITE`）**：默认编译 `SOUI/src/control/SEditLite.cpp`，不链 richedit41。
+  公开的 `SEdit` / `IEdit` 接口和 XML 属性面与 RichEdit 版一致（插入/删除/选区/光标/密码/多行/滚动/cue text/
+  数字与大小写过滤都在），所以 `<combobox>`、`SMaskEdit`、`SDateTimeEdit` 这些依赖方不用改。
+  富文本能力（RTF 读写、字符级格式、竖排、IME 组字下划线、拖放）是有意的 no-op；剪贴板是进程内静态缓冲
+  （裸机没有系统剪贴板）。要换回 RichEdit 版：`project.cmake` 里 `set(SOUI_FR_EDIT_LITE OFF)` +
+  `set(SOUI_FR_USE_RICHEDIT ON)`，代价是多编 ~250 个 richedit41 源文件（且只有宿主构建成立）。
 - **可运行镜像必须开优化**：同一份源码 `-O0` 的 `text` 是 5.0MB，越过 mps2-an385 的 4MB FLASH，
   QEMU 上表现为复位即 HardFault（"can't escalate 3 to HardFault"）；`-DCMAKE_BUILD_TYPE=MinSizeRel`
   后是 2.4MB。构建脚本/CI 一律用 `MinSizeRel`，不要拿调试构建去跑 QEMU。

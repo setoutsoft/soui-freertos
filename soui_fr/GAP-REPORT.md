@@ -45,15 +45,22 @@
 ## 运行验证
 
 - runnable 版（gc-sections，87KB）：QEMU mps2-an385 启动 → `[smoke] SStringA len=43`（SOUI SStringA 在 swinx FreeRTOS 堆上构造/析构成功）→ 调度器空转正常。
-- swinx_test 回归：33 项 OK + PASS（新增 dump 测试后）。
+- 平台层回归：33 项 OK + PASS（含 dump 用例）。这套用例当时在独立工程 `swinx_test/` 里，现已并入本工程的第二个 target `soui_fr_selftest`（见 `selftest/`）。
 
 ## 复现
 
 ```bash
-cd /d/work/soui4/soui-freertos/soui_fr/build
-cmake -G Ninja -DCMAKE_TOOLCHAIN_FILE=../demo/cmake/toolchain-arm-freertos.cmake -DBOARD=mps2 -DSOUI_FR_CENSUS=ON ..   # census
-cmake --build .
-# runnable: -DSOUI_FR_CENSUS=OFF，qemu-system-arm -M mps2-an385 -nographic -kernel soui_fr.elf
+cd /d/work/soui4/soui-freertos/soui_fr
+
+./build.sh --census        # census 链接（--whole-archive，只链不跑）
+./build.sh --run           # runnable + QEMU 实跑两个镜像
+
+# 或者手工：
+cmake -S . -B build -G Ninja \
+    -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-arm-freertos.cmake" \
+    -DSOUI_FR_CENSUS=ON
+cmake --build build
+# runnable: -DSOUI_FR_CENSUS=OFF，qemu-system-arm -M mps2-an385 -nographic -kernel build/soui_fr.elf
 ```
 
 ## 下一步建议

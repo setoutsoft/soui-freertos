@@ -85,7 +85,17 @@ const HINSTANCE kAppInstance = (HINSTANCE)1;
 // The demo layout is deeper than the first-bring-up one (caption + combobox +
 // value animators + cairo), so give the UI task room to breathe.  IDF counts
 // stacks in BYTES.
-const int kUiTaskStackBytes = 49152;
+//
+// 11.10: 48KB -> 96KB.  This is *the* stack for the paint recursion, and the
+// peak is the first window creation, not the steady state: DispatchPaint() ->
+// _PaintChildren() -> DispatchPaint() descends the whole widget tree with a
+// CRect / SMatrix / SPainter / region ref at every level.  48KB survived steady
+// state for minutes and then died on the very first frame once each level grew
+// a few more bytes of profiler locals.  (The SWINX_FR_DEFAULT_STACK_WORDS in
+// components/soui/CMakeLists.txt is NOT this task -- that is the default for
+// helper tasks swinx creates internally, so changing it never affected the
+// overflow.)
+const int kUiTaskStackBytes = 98304;
 const UBaseType_t kUiTaskPriority = 5;
 
 void soui_ui_task(void *)
@@ -151,6 +161,16 @@ void soui_ui_task(void *)
     // 4. non-blocking message pump (a blocking GetMessage() would starve the
     //    board/touch polling and IDF's idle task on this core).
     //
+    //    Why not IMessageLoop::Run(): it blocks in WaitMsg() and then drains the
+    //    queue without a bound, which on this board means "runnable for seconds"
+    //    -> task watchdog.  Android's executePendingTask() has the same shape as
+    //    this loop (raw PeekMessage + IMessageLoop::OnMsg / ExecutePendingTask),
+    //    so the two ports still take the same path through the framework: the
+    //    Win32 pump itself (GetMessage/PeekMessage, including the dispatch of
+    //    pending accessibility WinEvents) is src/platform/common/msgpump.cpp,
+    //    shared with the POSIX ports -- there is no FreeRTOS-specific pump any
+    //    more.
+    //
     // Pump budget -- why it exists:
     //   SOUI's value animators request a frame every 16ms, but one repaint on
     //   this board costs tens to hundreds of milliseconds (cairo software
@@ -176,6 +196,11 @@ void soui_ui_task(void *)
     uint32_t nLastPresent = 0;
     uint32_t nLastPixels = 0;
     uint32_t nLastRects = 0;
+    uint32_t nLastFrames = 0;
+#if SOUI_FPS_ONLY
+    uint64_t nLastInvalUs = 0;
+    uint32_t nLastInvalCount = 0;
+#endif
     uint64_t nLastFlushUs = 0;
     TickType_t tLastReport = xTaskGetTickCount();
 
@@ -211,6 +236,21 @@ void soui_ui_task(void *)
         // Replay the samples captured by the touch task while this thread was
         // painting.  Cheap (a queue drain), so it runs before anything else.
         soui_board_poll_touch(hWnd);
+
+        // (The one-shot framebuffer dump / mapping test pattern used for the
+        // 11.9 "drawn in the wrong place" investigation has been removed --
+        // root cause was the SPI DMA chunk sync in soui_board_esp32.cpp, not
+        // the render or present path.  soui_board_test_pattern() and
+        // soui_board_dump_rect() are still available for manual diagnosis;
+        // see README 11.9.
+
+#if SOUI_FPS_ONLY
+        // Clip-free A/B load: request one repaint of the fps text every pump
+        // round.  postMsg() coalesces WM_PAINT, so the queue never grows; the
+        // achievable frame rate is then bounded only by render + present,
+        // not by a timer or by the animator's 16ms cadence.
+        soui_fps_tick(hWnd);
+#endif
 
         const TickType_t tRound = xTaskGetTickCount();
         int nMsgs = 0;
@@ -249,32 +289,91 @@ void soui_ui_task(void *)
             const uint32_t dPaints = nPaintCount - nLastPaintCount;
             const double paintMs = dPaints ? (double)(nPaintUs - nLastPaintUs) / 1000.0 / dPaints : 0.0;
             const double pixelKps = (double)dPix / 3000.0;  // px/ms == kpx/s
-            // nPaintCount == soui_board_frame_count(): both count finished
-            // WM_PAINTs.  Report fps directly from it -- "presents" is a blit
-            // count (one frame can emit 2 when windows overlap), so dividing
-            // presents by seconds over-reports the frame rate by ~1.8x.
-            const double fps = (double)dPaints / 3.0;
-            const double presPerFrame = dPaints ? (double)(nPresent - nLastPresent) / dPaints : 0.0;
-            ESP_LOGI(kTag, "fps=%.1f, paint=%.1fms, flush=%.1fms | presents=%u (+%u/3s, %.2f/frame), pixels=%u (+%u/3s), %.0f kpix/s",
-                     fps, paintMs, flushMs,
+            // One "frame" == one completed refresh round (the same basis the
+            // LVGL firmware uses).  For every normal stage dFrames == dPaints.
+            // The blank-paint scan's "direct_full" stage has NO WM_PAINT: the
+            // pump pushes the framebuffer straight to the LCD and bumps the
+            // frame counter itself, so fps must come from the counter, not
+            // from the WM_PAINT count.  "presents" is a blit count (one frame
+            // can emit 2 when windows overlap) and would over-report by ~1.8x.
+            const uint32_t nFrames = soui_board_frame_count();
+            const uint32_t dFrames = nFrames - nLastFrames;
+            const double fps = (double)dFrames / 3.0;
+            const double frameMs = dFrames ? 3000.0 / (double)dFrames : 0.0;
+            const double presPerFrame = dFrames ? (double)(nPresent - nLastPresent) / dFrames : 0.0;
+            // frame - paint is the inter-frame gap: pump loop, invalidate,
+            // scheduling.  Split out InvalidateRect so the rest is explicit.
+            // Only the fps-window scan instruments InvalidateRect(); the real
+            // demo's invalidations come from inside the animator dispatch.
+#if SOUI_FPS_ONLY
+            const uint64_t nInvalUs = soui_fps_inval_us();
+            const uint32_t nInvalCount = soui_fps_inval_count();
+            const uint32_t dInval = nInvalCount - nLastInvalCount;
+            const double invalMs = dInval ? (double)(nInvalUs - nLastInvalUs) / 1000.0 / dInval : 0.0;
+            ESP_LOGI(kTag, "fps=%.1f, frame=%.1fms, paint=%.1fms (inval=%.2fms), flush=%.1fms | presents=%u (+%u/3s, %.2f/frame), pixels=%u (+%u/3s), %.0f kpix/s",
+                     fps, frameMs, paintMs, invalMs, flushMs,
                      (unsigned)nPresent, (unsigned)(nPresent - nLastPresent), presPerFrame,
                      (unsigned)nPixels, (unsigned)dPix, pixelKps);
+            nLastInvalUs = nInvalUs;
+            nLastInvalCount = nInvalCount;
+#else
+            // Real demo (the original soui_sim UI): no per-invalidate timer --
+            // its invalidations happen inside the animator dispatch, not in a
+            // hook this file owns.
+            ESP_LOGI(kTag, "fps=%.1f, frame=%.1fms, paint=%.1fms, flush=%.1fms | presents=%u (+%u/3s, %.2f/frame), pixels=%u (+%u/3s), %.0f kpix/s",
+                     fps, frameMs, paintMs, flushMs,
+                     (unsigned)nPresent, (unsigned)(nPresent - nLastPresent), presPerFrame,
+                     (unsigned)nPixels, (unsigned)dPix, pixelKps);
+#endif
+#if SOUI_FPS_ONLY
+            // Active scan stage: "blank mode=N ..." or "elements=N".
+            ESP_LOGI(kTag, "[scan] %s", soui_fps_scan_label());
+#endif
             nLastPresent = nPresent;
             nLastPixels = nPixels;
             nLastRects = nRects;
+            nLastFrames = nFrames;
             nLastFlushUs = nFlushUs;
             nLastPaintUs = nPaintUs;
             nLastPaintCount = nPaintCount;
             tLastReport = xTaskGetTickCount();
         }
 
-        // One tick, not ten.  With CONFIG_FREERTOS_HZ=1000 a tick is 1ms, which
-        // is the granularity of the input path now: a tap is picked up by the
-        // sampler within 8ms and replayed at the top of the next round, so this
-        // sleep is the last thing between the finger and the paint.  It still
-        // yields to IDLE1 (the task watchdog's condition) -- it just does so
-        // for 1ms instead of 10ms.
+        // Pump pacing (11.8).  A fixed vTaskDelay(1) quantises every frame to
+        // the 1kHz tick: measured +1.0ms per frame, 91 -> 102fps when removed.
+        // A pure vTaskDelay(0) loop only yields to same-or-higher priorities,
+        // so IDLE1 never runs and the 5s task watchdog barks; a single 1-tick
+        // delay every 250ms keeps it quiet at ~0.4% of the wall clock instead
+        // of 11% per frame.
+        //
+        // A tick is still the input granularity (a tap is sampled within 8ms
+        // and replayed at the top of the next round), and IDLE1 still runs.
+#if SOUI_FPS_ONLY
+        {
+            static int64_t s_lastIdleFeedUs = 0;
+            const int nDelay = soui_fps_pump_delay();
+            if (nDelay > 0)
+            {
+                vTaskDelay((TickType_t)nDelay);
+                s_lastIdleFeedUs = esp_timer_get_time();
+            }
+            else
+            {
+                const int64_t nowUs = esp_timer_get_time();
+                if (nowUs - s_lastIdleFeedUs >= 250000)
+                {
+                    vTaskDelay(1); // feed IDLE1 (task watchdog), 4 times a second
+                    s_lastIdleFeedUs = esp_timer_get_time();
+                }
+                else
+                {
+                    vTaskDelay(0); // yield only: no 1ms tick boundary to wait for
+                }
+            }
+        }
+#else
         vTaskDelay(1);
+#endif
     }
 
     ESP_LOGI(kTag, "main window closed, UI task exits");

@@ -71,16 +71,14 @@
     <button name="btn_anim" class="normalbtn" pos="118,134,214,158" text="@string/btn_anim" animate="1" tip="freeze / resume"/>
 
     <!--
-      Real <edit>: SEdit -> SRichEdit -> richedit41's CreateTextServices().
-      On a desktop build that symbol is dlopen()ed from the system Msftedit.dll;
-      this port links the vendored richedit41 in statically instead (see
-      SOUI_FR_USE_RICHEDIT in soui-freertos/cmake/SouiFreeRTOS.cmake), which is
-      what makes an editable control possible at all here.  Its whole point in
-      this demo is the keyboard path: WM_CHAR inserts, VK_BACK deletes, arrows
-      move the caret -- all of which require TranslateMessage() to hand out
-      proper characters instead of the raw VK.
-      The 1px frame + white fill come from the wrapper (SRichEdit draws only the
-      text), same trick as cbx_field above.
+      Real <edit>: SEdit -> SEditLite (SOUI_EDIT_LITE), the self-contained
+      plain-text editor -- no richedit41 is linked into this build (see
+      SOUI_FR_EDIT_LITE in soui-freertos/cmake/SouiFreeRTOS.cmake).  Its whole
+      point in this demo is the keyboard path: WM_CHAR inserts, VK_BACK
+      deletes, arrows move the caret -- all of which require TranslateMessage()
+      to hand out proper characters instead of the raw VK.
+      The 1px frame + white fill come from the enclosing <window skin=...>;
+      SEdit paints only the text.
     -->
     <window name="edt_field" pos="14,162,-14,186" skin="skin_field">
       <edit name="edt_input" pos="4,0,-6,-0" font="adding:-1" colorBkgnd="@color/thm_color"

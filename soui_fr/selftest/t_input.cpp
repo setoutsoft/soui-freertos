@@ -1,5 +1,5 @@
 /*
- * swinx_test/main_input.cpp
+ * soui_fr/selftest/t_input.cpp
  *
  * Input injection tests: driver-level SwinxInjectMouse / SwinxInjectKey ->
  * SConnection::postMsg -> pump (PeekMessage/TranslateMessage/DispatchMessage)
@@ -143,7 +143,9 @@ static void input_key_test(void)
     pump();
     CHECK(s_nRec == 2);
     CHECK(s_rec[0].msg == WM_KEYDOWN && s_rec[0].wp == 'A');
-    CHECK(s_rec[1].msg == WM_CHAR && s_rec[1].wp == 'A'); // TranslateMessage
+    // Win32：无 Shift 且 CapsLock 关闭时 VK_A -> WM_CHAR 'a'（小写）。
+    // 注入器只置了 down 位，没有动 CapsLock，所以这里期望小写。
+    CHECK(s_rec[1].msg == WM_CHAR && s_rec[1].wp == 'a'); // TranslateMessage
 
     SConnection *conn = SConnMgr::instance()->getConnection();
     CHECK((conn->GetKeyState('A') & 0x8000) != 0); // down state visible

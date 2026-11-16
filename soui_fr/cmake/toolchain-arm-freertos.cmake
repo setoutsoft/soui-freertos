@@ -1,8 +1,13 @@
 # toolchain-arm-freertos.cmake
 #
-# Bare-metal ARM Cortex-M3 cross-compilation toolchain for FreeRTOS targets.
-# Used both by this demo and (eventually) the swinx module build via
-# freeRTOS.cmake, which expects SOUI_FREERTOS_REAL to be provided here.
+# Bare-metal ARM Cortex-M3 cross-compilation toolchain for the FreeRTOS targets.
+# Used by soui_fr (both soui_fr.elf and soui_fr_selftest.elf):
+#
+#   cmake -S . -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-arm-freertos.cmake
+#
+# build.bat / build.sh in the same project pass this file automatically, and add
+# the arm-none-eabi bin directory to PATH when the compiler is installed but not
+# on PATH.
 
 set( CMAKE_SYSTEM_NAME        Generic )
 set( CMAKE_SYSTEM_PROCESSOR   arm )

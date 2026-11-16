@@ -12,7 +12,8 @@ ninja -C my_app/build && ./my_app/build/hello_freertos.exe   # 关窗口退出
 
 | 路径 | 作用 |
 |---|---|
-| `CMakeLists.txt` | 全部构建配置：`include(soui.cmake)` + `soui_fr_project()` |
+| `CMakeLists.txt` | 只有工程声明：`project()` + `include(cmake/project.cmake)` |
+| `cmake/project.cmake` | **本工程的构建入口**：FreeRTOSConfig、任务栈、`<edit>` 实现、源文件、资源、`COMPONENTS`、要不要 SDL 宿主。改工程就改这一个文件 |
 | `main.cpp` | FreeRTOS 任务 → SOUI 启动 → SDL/消息泵主循环 |
 | `config/FreeRTOSConfig.h` | 内核配置（栈、heap_3、tick、hook 开关） |
 | `uires/uires.idx` | 资源索引，`LAYOUT:MAIN` 对应 `xml/main.xml` |
@@ -24,8 +25,11 @@ ninja -C my_app/build && ./my_app/build/hello_freertos.exe   # 关窗口退出
 - **改界面**：编辑 `uires/xml/main.xml`；新增资源（图片/SVG/skin）就在 `uires.idx` 里登记对应节点。
 - **加源文件**：`soui_fr_project(hello_freertos SOURCES main.cpp my_page.cpp SIM_HOST)`。
 - **加库**：`LIBRARIES foo`；只影响本工程。
-- **换 FreeRTOSConfig**：`FREERTOS_CONFIG config_stm32`（默认识别 `./config`）。
-- **裸机**：去掉 `SIM_HOST`，加 `-DCMAKE_TOOLCHAIN_FILE=<arm-none-eabi.cmake>`。此时 `soui.cmake` 自动切到 vendored cairo + `GCC/ARM_CM3` port，并跳过 SDL 宿主层与 DLL 收拢；`main()` 换成你的板级启动即可（`app_task` 里的 SOUI 流程不变）。
+- **换 FreeRTOSConfig**：`cmake/project.cmake` 里 `set(SOUI_FR_CONFIG_DIR ...)`，或给 `soui_fr_project()` 传 `FREERTOS_CONFIG config_stm32`。
+- **改任务栈**：`set(SOUI_FR_STACK_WORDS 16384)`（单位"字"；宿主 128KB、裸机 64KB 是兜底值，cairo 的 mask 合成路径吃栈）。
+- **整棵树加编译选项**（连 swinx/SOUI/cairo 一起）：`include` 之前 `set(SOUI_FR_COMPILE_OPTIONS ...)` / `set(SOUI_FR_DEFINITIONS ...)`；只影响应用自己的源文件就用 `soui_fr_project(... COMPILE_OPTIONS ...)`。
+- **只要平台层不要 SOUI**：`COMPONENTS swinx`（见 `soui_fr` 里的 `soui_fr_selftest` target），省掉 ~120 个 TU。
+- **裸机**：去掉 `SIM_HOST`，加 `-DCMAKE_TOOLCHAIN_FILE=<arm-none-eabi.cmake>`。此时框架自动切到 vendored cairo + `GCC/ARM_CM3` port，并跳过 SDL 宿主层与 DLL 收拢；`main()` 换成你的板级启动即可（`app_task` 里的 SOUI 流程不变）。裸机还要在 `cmake/project.cmake` 里自己给 `SOURCES` 补内核源（`tasks.c`/`port.c`/`heap_3.c`…，参考 `soui_fr`）。
 - **不需要 PE 资源**：传 `NO_RESOURCES` 并自行提供 `SResProvider`（比如从文件系统读 `uires`）。
 
 ## 已替你处理掉的坑
