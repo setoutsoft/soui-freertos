@@ -6,6 +6,10 @@ SOUI4/SOUI5 移植 FreeRTOS 的全部实验工程。上游源码在 `D:/work/sou
 
 ## 工程一览
 
+> ESP32-S3 真机的帧率实测与逐项优化记录见 [esp32s3/PERFORMANCE.md](esp32s3/PERFORMANCE.md)；
+> 编译烧录见 [esp32s3/BUILD_FLASH.md](esp32s3/BUILD_FLASH.md)，板级设计见 [esp32s3/README.md](esp32s3/README.md)。
+
+
 | 目录 | 目标 | 说明 |
 |------|------|------|
 | `cmake/` | — | **构建机制**：`soui.cmake`（环境 + 三个函数）、`SouiFreeRTOS.cmake`（依赖描述）、`CopyRuntimeDlls.cmake`；不含任何工程取值 |

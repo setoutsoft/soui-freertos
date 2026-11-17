@@ -284,7 +284,7 @@ python tools/serial_capture.py COM4 30 > cap.txt 2>&1
 grep -E "fps=|panic|abort|WDT" cap.txt
 ```
 
-正常启动 + 稳态的样子：
+正常启动 + 稳态的样子（下面是 11-15 优化前的历史抓取，当前版本帧率见后文基线表与 PERFORMANCE.md）：
 
 ```
 I (1363) soui_app: == SOUI4 on ESP32-S3 (soui_sim demo) ==
@@ -298,7 +298,7 @@ I (7475) soui_app: fps=20.0, paint=44.7ms, flush=0.9ms | presents=258 (+258/3s, 
 I (10646) soui_app: fps=21.7, paint=42.3ms, flush=0.4ms | presents=534 (+276/3s, 4.25/frame), pixels=696480 (+202752/3s), 68 kpix/s
 ```
 
-健康基线（双动画：橙块扫动 + 蓝块 alpha 呼吸）：
+健康基线（**当前设备版本**：双动画，橙块扫动 + 蓝块 alpha 呼吸，`fade_box visible="1"`）：
 
 | 指标 | 正常范围 | 含义 |
 |---|---|---|
@@ -306,10 +306,10 @@ I (10646) soui_app: fps=21.7, paint=42.3ms, flush=0.4ms | presents=534 (+276/3s,
 | `resource blob: 81298 bytes` + `found 56 resources` | 1.8~2.1 s | **必须出现**：windres COFF 挂上了且被解析（见 README 4.1） |
 | `system res flags=0x08` / `named ids registered: 13` | 约 2.1 s | 系统皮肤与命名 id 都加载成功 |
 | 首帧上屏（`main window up`） | 约 4.4 s | 布局 + SVG 皮肤 + cairo 首帧 + 整屏 SPI |
-| `fps` | 20~22 | **看这个**，等于完成的 `WM_PAINT` 次数 / 3 s |
-| `paint` | 42~45 ms | 一帧的绘制耗时 |
+| `fps` | **约 40**（双动画）；单动画 56~58 | **看这个**，等于完成的 `WM_PAINT` 次数 / 3 s；帧率口径与优化过程见 [PERFORMANCE.md](PERFORMANCE.md) |
+| `paint` | 历史 42~45 ms；当前单动画 14.2 ms | 一帧的绘制耗时；双动画 40 fps 版本未单独逐项记录 |
 | `flush` | < 1.5 ms | 提交到屏 |
-| `presents` | 4~5 次/帧 | **不是帧率**，是脏矩形 blit 次数 |
+| `presents` | 历史 4~5 次/帧；当前约 1.1~1.2 次/帧 | **不是帧率**，是脏矩形 blit 次数 |
 | `panic` / `abort` / `WDT` | 无 | 有就是崩了 |
 
 `presents` 和 `fps` 别搞混：一帧会发好几次脏矩形提交，早期把 `presents/3` 当帧率
@@ -329,7 +329,7 @@ I (10646) soui_app: fps=21.7, paint=42.3ms, flush=0.4ms | presents=534 (+276/3s,
 | 烧完屏幕没反应、日志停在 `rst:0x1` | 只烧了 app 而分区表/引导不匹配 | 3.2 全量烧 `@flash_args` |
 | `bash: ./tools/idf_env.sh: No such file or directory`，可 `ls ./tools/idf_env.sh` 偏偏能看到 | 命令行里混进了**不可见字符**（BOM `U+FEFF` / 零宽空格 `U+200B`），从网页或聊天窗口复制时带进来的；文件本身没问题 | 重打这行，别粘贴。自查：`history \| tail -3 \| cat -A`，行首出现 `M-oM-;M-?`（BOM）或 `M-bM-^@M-^K`（ZWSP）就是它 |
 | 屏幕上的界面和改过的 XML 不一致 | 改完没重新编译，或者编译了没重烧 | 见 2.4：`ninja` 会自动重跑资源链；再走 3.2 烧录 |
-| `fps` 掉到 14 左右 | 有东西整屏重绘，最常见是 `uires/xml/dlg_main.xml` 的 `cache` 被从 soui_sim 复制成 `"1"` | 改回 `"0"` 重编重烧，看 README 坑 16 |
+| `fps` 掉到 14 左右 | 有东西整屏重绘，最常见是 `uires/xml/dlg_main.xml` 的 `cache` 被从 soui_sim 复制成 `"1"` | 改回 `"0"` 重编重烧（每帧都 invalidate 的窗口不要用 cache） |
 | `windres: preprocessing failed.` | `windres` 找不到 mingw 的 gcc 预处理器 | 正常构建不会遇到（`cmake/soui_res.cmake` 已用 `cmake -E env --modify` 补齐 PATH）。手工绕开 `idf_env.sh` 直接敲 windres 才会；用 2.1 的标准命令 |
 | configure 阶段 `[soui_res] windres not found` | 没装 mingw 的 binutils | MSYS2：`pacman -S mingw-w64-x86_64-binutils`；Linux：`apt install binutils-mingw-w64-x86-64` |
 | `resource blob: 0 bytes` / 开机报 `resource not found` | 资源 blob 没被链进镜像 | 检查 `app_main.cpp` 对 `_binary_soui_coff_o_start` 的强引用是否还在；见 README 4.1 |
@@ -499,6 +499,6 @@ python -m esptool --chip esp32s3 -p COM4 -b 921600 write_flash @flash_args
 
 ## 8. 相关文档
 
-- `README.md`：整体设计、11 个移植期修复的缺陷、性能优化的完整数据（第 10 节）。
-- `README.md` 第 3~5 节：本文的详细背景（为什么不用 export.sh / idf.py）。
+- `README.md`：当前状态、硬件参数、编译 / 烧录、性能参数与已知限制。
+- `PERFORMANCE.md`：帧率实测与逐项优化全过程。
 - `tools/idf_env.sh` 头部注释：`PATH` 装配逻辑与两个变量的来历。
