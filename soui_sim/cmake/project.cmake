@@ -24,8 +24,8 @@ set(SOUI_FR_STACK_WORDS 32768)
 
 # <edit> 控件走轻量实现（SEditLite，SOUI_EDIT_LITE），不编 richedit41。
 # XML 属性面和控制行为与 RichEdit 版一致，省掉 ~250 个 2001 年代 Win32 C++
-# 源文件（这是整个构建里最长的一段）。确实需要 RTF / 字符级排版时，把这里改
-# 成 OFF 并加 set(SOUI_FR_USE_RICHEDIT ON)。
+# 源文件（这是整个构建里最长的一段）。确实需要 RTF / 字符级排版时，把这里
+# 改成 OFF 并加 set(SOUI_FR_USE_RICHEDIT ON)。
 set(SOUI_FR_EDIT_LITE ON)
 
 # 宿主默认优先链系统的 cairo/pixman/libpng/zlib（pkg-config 能证明存在时），
@@ -48,6 +48,10 @@ include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/soui.cmake)
 # -----------------------------------------------------------------------------
 # sources / resources, grouped the way the SOUI wizard groups them
 # -----------------------------------------------------------------------------
+# Shared on-screen keyboard: the same source file is compiled into esp32s3's
+# `main` component, so both demos exercise the same keymaps / injection path.
+set(SOUI_FR_SOFTKB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../common/softkeyboard")
+
 file(GLOB CURRENT_HEADERS *.h *.hpp)
 file(GLOB CURRENT_SRCS *.cpp)
 file(GLOB_RECURSE CURRENT_SOUIS ${CMAKE_CURRENT_SOURCE_DIR}/uires/*.*)
@@ -59,10 +63,11 @@ source_group("SoUI Resource" FILES ${CURRENT_SOUIS})
 source_group("Resource Files" FILES ${CURRENT_RC})
 
 soui_fr_project(${project_name}
-    SOURCES         ${CURRENT_SRCS}
+    SOURCES         ${CURRENT_SRCS} ${SOUI_FR_SOFTKB_DIR}/SoftKeyboard.cpp
     RESOURCES       uires
     RESOURCE_SCRIPT main.rc
     COMPONENTS      all
+    INCLUDES        ${SOUI_FR_SOFTKB_DIR}
     SIM_HOST)
 
 # Same as the wizard: one precompiled header, pulled in by every translation

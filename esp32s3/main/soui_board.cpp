@@ -394,6 +394,10 @@ void inject_sample(HWND hWnd, const TouchSample &s)
     if (x == s_injX && y == s_injY && down == s_injDown)
         return;
 
+#if defined(SOUI_KB_AUTOTEST)
+    printf("[kb] touch x=%d y=%d down=%d prev=%d\n", x, y, down, s_injDown);
+#endif
+
     if (down && !s_injDown)
         SwinxInjectMouse(hWnd, WM_LBUTTONDOWN, x, y, MK_LBUTTON);
     else if (!down && s_injDown)
@@ -433,6 +437,21 @@ void soui_board_poll_touch(HWND hWnd)
     s.y = (int16_t)y;
     s.down = (uint8_t)(down ? 1 : 0);
     inject_sample(hWnd, s);
+}
+
+void soui_board_inject_touch(int x, int y, int pressed)
+{
+    TouchSample s;
+    s.x = (int16_t)x;
+    s.y = (int16_t)y;
+    s.down = (uint8_t)(pressed ? 1 : 0);
+    if (s_touchQ)
+    {
+        if (xQueueSend(s_touchQ, &s, 0) != pdTRUE)
+            ESP_LOGW(kTag, "synthetic touch queue full");
+        return;
+    }
+    ESP_LOGW(kTag, "synthetic touch dropped: no sampler queue");
 }
 
 uint32_t soui_board_present_count(void)

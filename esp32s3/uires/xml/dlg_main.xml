@@ -35,7 +35,7 @@
     <!-- content: bitmap on the left, description on the right -->
     <img name="img_view" pos="14,32,78,96"/>
     <text class="cls_txt_title" text="@string/hello" pos="88,32,-14,52"/>
-    <text class="cls_txt_sub" text="@string/sub" pos="88,54,-14,102"/>
+    <text class="cls_txt_sub" text="@string/sub" pos="88,54,-14,86"/>
 
     <!--
       combobox (dropDown=1: the embedded edit is hidden, the control draws the
@@ -52,7 +52,7 @@
       Kept out of anim_box / fade_box's columns only so the demo reads clearly:
       the list opens downward over the button row and the description text.
     -->
-    <window name="cbx_field" pos="14,106,-14,130" skin="skin_field" visible="1">
+    <window name="cbx_field" pos="14,88,-14,112" skin="skin_field" visible="1">
       <combobox name="cbx_speed" pos="0,0,-0,-0" dropDown="1" focusable="1" dropHeight="90" curSel="1"
                 animateTime="0" padding="6,0,0,0" drawFocusRect="0" font="adding:-1">
         <dropdownStyle>
@@ -71,6 +71,7 @@
     <!-- commands handled by CMainDlg via EVENT_ID_COMMAND(R.id.xxx) -->
     <button name="btn_test" class="normalbtn" pos="14,134,110,158" text="@string/btn_switch" animate="1" tip="PNG / SVG"/>
     <button name="btn_anim" class="normalbtn" pos="118,134,214,158" text="@string/btn_anim" animate="1" tip="freeze / resume"/>
+    <button name="btn_kb" class="normalbtn" pos="218,134,306,158" text="Keyboard" animate="1" tip="soft keyboard"/>
 
     <!--
       Real <edit>: SEdit -> SEditLite (SOUI_EDIT_LITE), the self-contained
@@ -82,7 +83,7 @@
       The 1px frame + white fill come from the enclosing <window skin=...>;
       SEdit paints only the text.
     -->
-    <window name="edt_field" pos="14,162,-14,186" skin="skin_field" visible="0">
+    <window name="edt_field" pos="14,116,-14,140" skin="skin_field" visible="1">
       <edit name="edt_input" pos="4,0,-6,-0" font="adding:-1" colorBkgnd="@color/thm_color"
             cueText="@string/edt_cue" cueColor="@color/thm_txt_disabled"/>
     </window>
@@ -113,5 +114,7 @@
       neither anim_box's sweep row nor fade_box's column covers it.
     -->
     <text name="fps_label" class="cls_txt_sub" pos="196,222,306,240" cache="1" text="-- fps"/>
+    <!-- Soft keyboard host; CSoftKeyboard fills it from the shared keymaps. -->
+    <window name="softkb" pos="4,142,316,238" visible="0" skin="skin_popup" cache="0"/>
   </root>
 </SOUI>

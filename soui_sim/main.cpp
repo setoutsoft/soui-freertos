@@ -138,6 +138,8 @@ static int RunApp(void)
     //   3 = arrows only (is the combo already focused?)
     //   4 = 3 x Tab to the combobox, then arrows with dumps in between
     //   5 = click the <edit> and type "HELLO", Space, Backspace, Shift+A, B
+    //   6 = soft keyboard: focus edit, show keyboard, tap q / ABC / A
+    //   7 = focus edit alone, verify the keyboard opens, then tap q
     // Every scheduled dump writes sim_k<mode>_t<tick>.bmp, so a headless run
     // still yields pixels to inspect.  0 / unset disables all of it.
     const int testMode = getenv("SOUI_SIM_TESTUI") ? atoi(getenv("SOUI_SIM_TESTUI")) : 0;
@@ -169,7 +171,7 @@ static int RunApp(void)
             {
                 switch (pumpTicks)
                 {
-                case 5: { px = 80; py = 174; break; }
+                case 5: { px = 80; py = 128; break; }
                 case 10: SwinxInjectKey(hWnd, WM_KEYDOWN, 'H', 0); SwinxInjectKey(hWnd, WM_KEYUP, 'H', 0); break;
                 case 11: SwinxInjectKey(hWnd, WM_KEYDOWN, 'E', 0); SwinxInjectKey(hWnd, WM_KEYUP, 'E', 0); break;
                 case 12: SwinxInjectKey(hWnd, WM_KEYDOWN, 'L', 0); SwinxInjectKey(hWnd, WM_KEYUP, 'L', 0); break;
@@ -182,6 +184,45 @@ static int RunApp(void)
                 case 22: SwinxInjectKey(hWnd, WM_KEYUP, 0x10, 0); break;
                 case 24: SwinxInjectKey(hWnd, WM_KEYDOWN, 'B', 0); SwinxInjectKey(hWnd, WM_KEYUP, 'B', 0); break;
                 case 26: dump = 1; break;
+                default: break;
+                }
+            }
+            else if (mode == 6) // soft keyboard: taps go through the button matrix
+            {
+                switch (pumpTicks)
+                {
+                case 5:  { px = 80; py = 128; break; }  // focus <edit>
+                case 10: { px = 262; py = 146; break; } // btn_kb -> show
+                case 15: { px = 40; py = 155; break; }  // q
+                case 20: { px = 25; py = 178; break; }  // ABC (upper mode)
+                case 25: { px = 60; py = 178; break; }  // A
+                case 30: {
+                    SWindow *pEdit = dlgMain.GetRoot()->FindChildByName(L"edt_input");
+                    printf("[kb] edit text='%s'\n",
+                           pEdit ? pEdit->GetWindowText().c_str() : "<no edit>");
+                    dump = 1;
+                    break;
+                }
+                default: break;
+                }
+            }
+            else if (mode == 7) // focus alone must open the soft keyboard
+            {
+                switch (pumpTicks)
+                {
+                case 5:  { px = 80; py = 128; break; }  // focus <edit>
+                case 12: {
+                    SWindow *pKb = dlgMain.GetRoot()->FindChildByName(L"softkb");
+                    printf("[kb] focus auto-show=%d\n",
+                           pKb && pKb->IsVisible(TRUE) ? 1 : 0);
+                    px = 40; py = 155; break;           // q
+                }
+                case 22: {
+                    SWindow *pEdit = dlgMain.GetRoot()->FindChildByName(L"edt_input");
+                    printf("[kb] edit text='%s'\n",
+                           pEdit ? pEdit->GetWindowText().c_str() : "<no edit>");
+                    dump = 1; break;
+                }
                 default: break;
                 }
             }

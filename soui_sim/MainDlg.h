@@ -14,6 +14,7 @@
 
 #include <core/Svg.h>
 #include <valueAnimator/SValueAnimator.h>
+#include "SoftKeyboard.h"
 
 class CMainDlg : public SHostWnd
               , public SDpiHandler<CMainDlg>
@@ -28,6 +29,7 @@ class CMainDlg : public SHostWnd
     void OnMinimize();
     void OnSwitchImage(); // btn_test: toggle PNG <-> SVG in img_view
     void OnToggleAnim();  // btn_anim: freeze / resume the value animators
+    void OnToggleKeyboard(); // btn_kb: show / hide the soft keyboard
 
     // ---- combobox events (EVENT_MAP below) --------------------------------
     void OnCbxSpeedChange(IEvtArgs *e); // cbx_speed: EVT_CB_SELCHANGE
@@ -41,6 +43,7 @@ class CMainDlg : public SHostWnd
 //        EVENT_NAME_COMMAND(L"btn_min", OnMinimize)
         EVENT_ID_COMMAND(R.id.btn_test, OnSwitchImage)
         EVENT_ID_COMMAND(R.id.btn_anim, OnToggleAnim)
+        EVENT_ID_COMMAND(R.id.btn_kb, OnToggleKeyboard)
         EVENT_ID_HANDLER(R.id.cbx_speed, EventCBSelChange::EventID, OnCbxSpeedChange)
     EVENT_MAP_END2(SHostWnd)
 
@@ -71,6 +74,8 @@ class CMainDlg : public SHostWnd
     SAutoRefPtr<SIntAnimator> m_moveAni;
     SAutoRefPtr<SByteAnimator> m_fadeAni;
     BOOL m_bAnimFrozen;
+
+    souifr::CSoftKeyboard m_softKb; // LVGL-style data-driven on-screen keyboard
 };
 
 #endif // SOUISIM_MAINDLG_H_

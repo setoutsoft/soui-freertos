@@ -45,6 +45,7 @@
 #include <helper/SDpiHelper.hpp>
 #include <core/Svg.h>
 #include <valueAnimator/SValueAnimator.h>
+#include "SoftKeyboard.h"
 
 // R.id.* / R.name / UIRES.* (generated from uires/uires.idx by uiresbuilder).
 // Declarations only here -- app_main.cpp defines the tables (INIT_R_DATA).
@@ -63,6 +64,7 @@ class CMainDlg : public SNS::SHostWnd
     void OnMinimize();
     void OnSwitchImage(); // btn_test: toggle PNG <-> SVG in img_view
     void OnToggleAnim();  // btn_anim: freeze / resume the value animators
+    void OnToggleKeyboard(); // btn_kb: show / hide the soft keyboard
 
     // ---- combobox events --------------------------------------------------
     void OnCbxSpeedChange(SNS::IEvtArgs *e); // cbx_speed: EVT_CB_SELCHANGE
@@ -81,6 +83,7 @@ class CMainDlg : public SNS::SHostWnd
         //EVENT_NAME_COMMAND(L"btn_min", OnMinimize)
         EVENT_ID_COMMAND(R.id.btn_test, OnSwitchImage)
         EVENT_ID_COMMAND(R.id.btn_anim, OnToggleAnim)
+        EVENT_ID_COMMAND(R.id.btn_kb, OnToggleKeyboard)
         EVENT_ID_HANDLER(R.id.cbx_speed, SNS::EventCBSelChange::EventID, OnCbxSpeedChange)
     EVENT_MAP_END2(SNS::SHostWnd)
 
@@ -116,6 +119,7 @@ class CMainDlg : public SNS::SHostWnd
     SNS::SWindow *m_pFps;  // fps_label: text rewritten by OnTimer
     SNS::SAutoRefPtr<SNS::SIntAnimator> m_moveAni;
     SNS::SAutoRefPtr<SNS::SByteAnimator> m_fadeAni;
+    souifr::CSoftKeyboard m_softKb;
     BOOL m_bAnimFrozen;
 
     // frame-rate averaging state (see OnTimer)

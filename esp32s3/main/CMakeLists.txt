@@ -27,6 +27,8 @@ idf_component_register(
         "soui_demo.cpp"
         "soui_board.cpp"
         "soui_board_esp32.cpp"
+        # Shared with soui_sim: same keymaps, same injection path.
+        "${SOUI_ROOT}/soui-freertos/common/softkeyboard/SoftKeyboard.cpp"
     INCLUDE_DIRS
         "."
         "${SWINX_DIR}"
@@ -34,6 +36,7 @@ idf_component_register(
         "${SWINX_DIR}/src"
         "${SWINX_DIR}/src/platform/freertos"
         "${FREERTOS_KERNEL_INC}"
+        "${SOUI_ROOT}/soui-freertos/common/softkeyboard"
     # IDF 5.x split the monolithic `driver` component; `main` does not
     # implicitly depend on everything, so the GPIO/SPI/I2C drivers that
     # soui_board_esp32.cpp includes must be named explicitly.
@@ -59,6 +62,13 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
     -fexceptions
     -std=gnu++17
     -include soui_idf_compat.h)
+
+# Boot-time scripted finger test for the soft keyboard (default OFF).
+# Enable with: cmake -S . -B build -DSOUI_KB_AUTOTEST=ON
+option(SOUI_KB_AUTOTEST "Run scripted soft-keyboard touch test at startup" OFF)
+if(SOUI_KB_AUTOTEST)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE SOUI_KB_AUTOTEST=1)
+endif()
 
 # ---------------------------------------------------------------------------
 # resources: uires -> windres COFF -> .rodata.embedded blob

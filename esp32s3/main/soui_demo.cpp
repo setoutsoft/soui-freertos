@@ -615,6 +615,14 @@ static CMainDlg *s_pDlg = NULL;
 static const UINT_PTR kFpsTimerId = 1;
 static const UINT kFpsTimerMs = 500;
 
+#if SOUI_KB_AUTOTEST
+// Boot-time scripted finger test for the soft keyboard. Feeds the real
+// touch queue (btn_kb -> q -> ABC -> A), then prints the edit text and
+// dumps the framebuffer so the result can be checked over serial.
+static const UINT_PTR kKbTestTimerId = 2;
+static const UINT kKbTestTimerMs = 100;
+#endif
+
 CMainDlg::CMainDlg()
     : SHostWnd(UIRES.LAYOUT.XML_MAINWND)
     , m_bShowSvg(FALSE)
@@ -642,11 +650,17 @@ BOOL CMainDlg::OnInitDialog(HWND /*wndFocus*/, LPARAM /*lInitParam*/)
     m_pFade = pRoot->FindChildByName(L"fade_box");
     m_pFps = pRoot->FindChildByName(L"fps_label");
 
+    // Soft keyboard host + injected-text target (same component as soui_sim).
+    m_softKb.Init(pRoot, L"softkb", GetHwnd(), pRoot->FindChildByName(L"edt_input"));
+
     LoadImages();
     ApplyImage();
     StartAnimation();
 
     SetTimer(kFpsTimerId, kFpsTimerMs);
+#if SOUI_KB_AUTOTEST
+    SetTimer(kKbTestTimerId, kKbTestTimerMs);
+#endif
     return 0;
 }
 
@@ -667,6 +681,51 @@ BOOL CMainDlg::OnInitDialog(HWND /*wndFocus*/, LPARAM /*lInitParam*/)
 //     printf has no %f and pulling in the float formatter costs ~4KB flash.
 void CMainDlg::OnTimer(UINT_PTR idEvent)
 {
+#if SOUI_KB_AUTOTEST
+    if (idEvent == kKbTestTimerId)
+    {
+        static int s_tick = 0;
+        const int tick = ++s_tick;
+        int x = -1, y = -1, down = 0;
+        switch (tick)
+        {
+        case 1:  x = 80;  y = 128; break;           // MOVE first, as in sim
+        case 2:  x = 80;  y = 128; down = 1; break; // focus <edit>
+        case 3:  x = 80;  y = 128; break;
+        case 8: { // edit focus alone is expected to have opened the keyboard
+            SWindow *pKb = GetRoot() ? GetRoot()->FindChildByName(L"softkb") : NULL;
+            SWindow *pEdit = GetRoot() ? GetRoot()->FindChildByName(L"edt_input") : NULL;
+            printf("[kbtest] edit focused=%d\n",
+                   pEdit && pEdit->IsFocused() ? 1 : 0);
+            printf("[kbtest] focus auto-show=%d\n",
+                   pKb && pKb->IsVisible(TRUE) ? 1 : 0);
+            break;
+        }
+        case 10: x = 40;  y = 155; down = 1; break; // q
+        case 11: x = 40;  y = 155; break;
+        case 14: x = 25;  y = 178; down = 1; break; // ABC -> upper
+        case 15: x = 25;  y = 178; break;
+        case 18: x = 60;  y = 178; down = 1; break; // A
+        case 19: x = 60;  y = 178; break;
+        case 23: {
+            SWindow *pEdit = GetRoot() ? GetRoot()->FindChildByName(L"edt_input") : NULL;
+            printf("[kbtest] edit text='%s'\n",
+                   pEdit ? pEdit->GetWindowText().c_str() : "<no edit>");
+            soui_board_dump_fb(2);
+            soui_board_dump_rect(14, 116, 306, 140, 1);
+            printf("[kbtest] DONE\n");
+            break;
+        }
+        default: break;
+        }
+        if (x >= 0)
+            soui_board_inject_touch(x, y, down);
+        if (tick >= 24)
+            KillTimer(kKbTestTimerId);
+        return;
+    }
+#endif
+
     if (idEvent != kFpsTimerId)
     {
         SetMsgHandled(FALSE);
@@ -821,6 +880,11 @@ void CMainDlg::OnSwitchImage()
 void CMainDlg::OnToggleAnim()
 {
     m_bAnimFrozen = !m_bAnimFrozen;
+}
+
+void CMainDlg::OnToggleKeyboard()
+{
+    m_softKb.Toggle();
 }
 
 // ---------------------------------------------------------------------------

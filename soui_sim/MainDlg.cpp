@@ -25,6 +25,11 @@ BOOL CMainDlg::OnInitDialog(HWND /*wndFocus*/, LPARAM /*lInitParam*/)
     m_pMove = pRoot->FindChildByName(L"anim_box");
     m_pFade = pRoot->FindChildByName(L"fade_box");
 
+    // Soft keyboard: the host is an empty <window name="softkb"/> in the XML.
+    // The component builds the keymap-driven button matrix and posts text into
+    // this native window's queue (SEditLite consumes WM_IME_CHAR directly).
+    m_softKb.Init(pRoot, L"softkb", GetHwnd(), pRoot->FindChildByName(L"edt_input"));
+
     LoadImages();
     ApplyImage();
     StartAnimation();
@@ -167,4 +172,9 @@ void CMainDlg::OnSwitchImage()
 void CMainDlg::OnToggleAnim()
 {
     m_bAnimFrozen = !m_bAnimFrozen;
+}
+
+void CMainDlg::OnToggleKeyboard()
+{
+    m_softKb.Toggle();
 }

@@ -60,6 +60,7 @@ static LRESULT CALLBACK inp_wndproc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_KEYDOWN:
     case WM_KEYUP:
     case WM_CHAR:
+    case WM_IME_CHAR:
         record(msg, wp, lp);
         return 0;
     case WM_NCCREATE:
@@ -157,6 +158,23 @@ static void input_key_test(void)
     CHECK((conn->GetKeyState('A') & 0x8000) == 0); // up clears the state
 
     tprint("[inp] key down/up + GetKeyState + WM_CHAR OK\n");
+}
+
+// ---------------------------------------------------------------------------
+// 2b) IME text injection: one WM_IME_CHAR per UTF-8 code point, no key state,
+//     no synthetic WM_KEYDOWN/WM_CHAR. This is the path the soft keyboard uses.
+// ---------------------------------------------------------------------------
+static void input_text_test(void)
+{
+    s_nRec = 0;
+    SwinxInjectText(s_hInpWnd, "A\xE4\xB8\xAD"); // "A" + U+4E2D (zhong)
+    pump();
+    CHECK(s_nRec == 2);
+    CHECK(s_rec[0].msg == WM_IME_CHAR && s_rec[0].wp == (int)(unsigned char)'A');
+    CHECK(s_rec[1].msg == WM_IME_CHAR && s_rec[1].wp == 0x4E2D);
+    SConnection *conn = SConnMgr::instance()->getConnection();
+    CHECK((conn->GetKeyState((UINT)(unsigned char)'A') & 0x8000) == 0);
+    tprint("[inp] IME text injection (UTF-8 -> WM_IME_CHAR) OK\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +278,7 @@ void run_input_tests(void)
     tprint("== input injection ==\n");
     input_mouse_test();
     input_key_test();
+    input_text_test();
     input_capture_test();
     input_cross_task_test();
 }

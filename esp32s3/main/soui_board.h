@@ -29,6 +29,11 @@ void soui_board_init(void);
  * messages are ordered with that thread's paint/timer messages. */
 void soui_board_poll_touch(HWND hWnd);
 
+/* Test hook (SOUI_KB_AUTOTEST): enqueue a synthetic sample into the SAME
+ * queue the FT6X36 sampler fills, so replay goes through inject_sample()
+ * and SwinxInjectMouse() exactly like a real finger. UI task only. */
+void soui_board_inject_touch(int x, int y, int pressed);
+
 /* Number of presents (dirty-rect blits) handed to the LCD since boot.
  * Diagnostic only: the pump logs it periodically to show that frames are
  * still reaching the panel.  Note one logical frame can produce several
