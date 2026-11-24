@@ -589,7 +589,8 @@ function(soui_fr_add_swinx)
         set(SOUI_FR_SWINX_PLATFORM_SRCS
             SConnection.cpp atoms.cpp framebuffer.cpp input.cpp
             memory.cpp fileapi.cpp sysapi.cpp
-            dlfreertos.cpp dlghelper.cpp syncapi.cpp winobjs.cpp)
+            dlfreertos.cpp dlghelper.cpp syncapi.cpp winobjs.cpp
+            win32_rich.cpp)
         list(TRANSFORM SOUI_FR_SWINX_PLATFORM_SRCS
              PREPEND "${SWINX_DIR}/src/platform/freertos/")
     endif()
